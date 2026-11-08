@@ -13,7 +13,11 @@ for tests and the `chimera` CLI.
   gestures and prosody, with the gestural score and a consonant chart on screen.
 - **Sing**: piano roll with lyrics per note; consonants land before the beat.
 - **Beatbox**: pads and a step sequencer, every drum an articulatory gesture.
-- **Bestiary**: songbird (two-voice syrinx), seal, alligator and elephant.
+- **Bestiary**: songbird (two-voice syrinx), seal, alligator and elephant, and ten invented
+  aliens (a three-voiced chord singer, a gas-bag skywhale, a glass singer, a swarm, …).
+- **Alien languages**: each alien speaks typed English in its own language, built from its own
+  sounds (the same word always becomes the same alien word; tonal; questions rise), and the keys can
+  sing the words one by one on their pitches.
 - **Duet** (`?show=<id>`): two 3D heads replay a pre-rendered song.
 
 Male, female and child bodies blend continuously. Everything on screen animates from live

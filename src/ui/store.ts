@@ -8,6 +8,7 @@ import type { ParamDef } from "../wasm/types.ts";
 import { BEAT_PRESETS, BASS_NOTE, beatReady, parseBeat, type BeatStep } from "../wasm/engine.ts";
 import { singNoteOn, singNoteOff, stopSinging, ensureDictionary } from "./singing.ts";
 import { stopSpeaking } from "./speech.ts";
+import { SING_WORDS, singNextWord } from "./alienSing.ts";
 import { connectMidi, disconnectMidi, type MidiStatus } from "./midi.ts";
 
 export type Mode = "play" | "speak" | "sing" | "bestiary" | "beatbox";
@@ -310,7 +311,8 @@ export const useStore = create<State>((set, get) => ({
     else if (s.mode === "bestiary") {
       const pp = creatureById(s.creature)?.params.find((p) => p.role === "pitch");
       const f = pp ? creatureKeyHz(midi, pp) : undefined;
-      if (s.keyCall) s.playCall(s.keyCall, f);
+      if (s.keyCall === SING_WORDS) singNextWord(s.creature, f);
+      else if (s.keyCall) s.playCall(s.keyCall, f);
       else if (pp && f) s.setCParam(pp.key, f);
     } else if (s.mode === "beatbox") {
       // keys hum a bass note under the beat (lips shut, nose open); new hum steps take it too

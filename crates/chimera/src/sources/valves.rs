@@ -5,7 +5,7 @@
 //!  - ClickTrain: impulsive sources (sperm-whale phonic lips, cicada tymbal ribs)
 //!  - Bubble: cavitation bubble (Rayleigh–Plesset) for the snapping shrimp
 
-use crate::math::{PI, cos, exp, js_max, js_min, pow, sin};
+use crate::math::{PI, cos, exp, js_max, js_min, pow, sin, sqrt};
 
 /// Outward-striking lip valve: m·h'' + r·h' + k·(h − h0) = S·(p_up − p_down). Opening area = w·max(h, 0).
 #[derive(Clone, Debug)]
@@ -196,7 +196,9 @@ pub struct Bubble {
     pub r0: f64,
     dt: f64,
     tension: f64,
-    viscosity: f64, // effective, includes thermal/acoustic damping
+    /// effective viscosity (Pa·s), standing in for thermal and acoustic damping too: the ring decays
+    /// at 2μ/(ρr₀²) per second
+    pub viscosity: f64,
     rho: f64,
     p0: f64,
     kappa: f64,
@@ -223,6 +225,16 @@ impl Bubble {
 
     /// The default snap duration (s).
     pub const DEFAULT_SNAP: f64 = 0.0012;
+
+    /// A bubble born at pinch-off: equilibrium radius `r0` (m), starting at that radius with a
+    /// wall velocity that rings it at its Minnaert frequency with relative amplitude `amplitude`
+    /// (the radius stays continuous, so its volume velocity steps instead of spiking).
+    pub fn pluck(&mut self, r0: f64, amplitude: f64) {
+        self.r0 = r0;
+        self.r = r0;
+        self.rd = amplitude * sqrt((3.0 * self.kappa * self.p0) / self.rho);
+        self.drop_until = self.t;
+    }
 
     #[inline]
     fn acc(&self, r: f64, rd: f64, pinf: f64) -> f64 {

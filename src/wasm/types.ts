@@ -303,3 +303,26 @@ export interface CreatureTelemetry {
   source: Record<string, number>;
   call: string | null;
 }
+
+/** An invented creature's language (crates/chimera/src/creatures/language.rs). */
+export interface AlienLanguage {
+  name: string;
+  about: string;
+}
+
+/** One English word and its alien form, timed from the start of the utterance (s). */
+export interface AlienWord {
+  text: string;
+  alien: string;
+  t0: number;
+  t1: number;
+}
+
+/** A planned alien utterance: its transliteration, words, length (s), and the flat keys the
+ *  worklet plays. */
+export interface AlienUtterance {
+  alien: string;
+  words: AlienWord[];
+  duration: number;
+  flat: number[];
+}

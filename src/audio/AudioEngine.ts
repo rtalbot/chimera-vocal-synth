@@ -166,6 +166,11 @@ export class AudioEngine {
     this.send({ type: "stopCall" });
   }
 
+  /** Play an alien utterance (its flat keys from `alienSpeak`). */
+  speakAlien(flat: number[], amp?: number): void {
+    this.send({ type: "speak", flat, amp });
+  }
+
   stopSpeech(): void {
     this.send({ type: "stopSpeech" });
   }

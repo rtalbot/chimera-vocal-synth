@@ -136,6 +136,20 @@ fn dispatch(st: &mut State, req: &Value) -> Res {
             c.telemetry(&mut t);
             to_json(&t)
         }
+        "alienLanguage" => {
+            let id: String = arg(req, "id")?;
+            Ok(chimera::creatures::language::language_of(&id).map_or(Value::Null, |l| json!({ "name": l.name, "about": l.about })))
+        }
+        "alienSpeak" => {
+            use chimera::creatures::language::{SpeakOptions, encode, speak};
+            let id: String = arg(req, "id")?;
+            let def = chimera::creatures::creature_by_id(&id).ok_or_else(|| format!("no creature {id}"))?;
+            let opts: SpeakOptions = arg::<Option<SpeakOptions>>(req, "options")?.unwrap_or_default();
+            match speak(def, &arg::<String>(req, "text")?, &opts) {
+                None => Ok(Value::Null),
+                Some(s) => Ok(json!({ "alien": s.alien_text(), "words": s.words, "duration": s.duration, "flat": encode(&s) })),
+            }
+        }
         // ---------------------------------------------------------------- planning (speech, song)
         "planUtterance" => to_json(&planner::plan_utterance(&arg::<Vec<Segment>>(req, "segments")?, &arg::<PlanOptions>(req, "options")?)),
         // how many planned segments each segment becomes (a diphthong plans as its two vowels),

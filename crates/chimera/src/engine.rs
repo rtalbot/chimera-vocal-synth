@@ -141,6 +141,10 @@ impl Engine {
         self.creature.as_ref()
     }
 
+    pub fn creature_mut(&mut self) -> Option<&mut CreatureVoice> {
+        self.creature.as_mut()
+    }
+
     /// The performer's settings for the creature (param index, value).
     pub fn set_creature_params(&mut self, values: &[(usize, f64)]) {
         if let Some(c) = self.creature.as_mut() {

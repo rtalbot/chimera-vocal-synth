@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { useStore } from "../store.ts";
 import { CREATURES, creatureById } from "../../wasm/engine.ts";
 import type { CreatureDef } from "../../wasm/types.ts";
@@ -8,6 +8,8 @@ import { Chip, Screen } from "./Screen.tsx";
 import { EncoderPages, type EncoderPage } from "./Encoder.tsx";
 import { Spectrogram } from "./Spectrogram.tsx";
 import { CreatureTubes } from "./CreatureTubes.tsx";
+import { AlienSpeak } from "./AlienSpeak.tsx";
+import { SING_WORDS } from "../alienSing.ts";
 
 /** Thumbnail: the creature's outline in blue with its airway traced in amber. */
 const Thumb = memo(function Thumb({ def }: { def: CreatureDef }) {
@@ -19,6 +21,9 @@ const Thumb = memo(function Thumb({ def }: { def: CreatureDef }) {
   return (
     <svg className="thumb" viewBox={`${v.view.x0 - pad} ${-v.view.y1 - pad} ${vw + 2 * pad} ${vh + 2 * pad}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
       <polygon points={pts(v.silhouette)} fill="none" stroke="var(--blue)" strokeWidth={stroke} strokeLinejoin="round" />
+      {(v.parts ?? []).map((p, i) => (
+        <polygon key={i} points={pts(p.pts)} fill="none" stroke="var(--blue)" strokeWidth={stroke * 0.7} strokeLinejoin="round" />
+      ))}
       {v.tubes.map((t) => (
         <polyline key={t.tube} points={pts(t.path)} fill="none" stroke="var(--amber)" strokeWidth={stroke * 0.9} strokeLinecap="round" strokeLinejoin="round" />
       ))}
@@ -26,12 +31,35 @@ const Thumb = memo(function Thumb({ def }: { def: CreatureDef }) {
   );
 });
 
-function Gallery() {
+/** The Bestiary's two sections: real animals, and the invented aliens (engine group "fantasy"). */
+type Section = "creatures" | "aliens";
+const sectionOf = (c: CreatureDef | undefined): Section => (c?.group === "fantasy" ? "aliens" : "creatures");
+const SECTIONS: { id: Section; label: string; list: CreatureDef[] }[] = [
+  { id: "creatures", label: "Creatures", list: CREATURES.filter((c) => sectionOf(c) === "creatures") },
+  { id: "aliens", label: "Aliens", list: CREATURES.filter((c) => sectionOf(c) === "aliens") },
+];
+
+function SectionTabs({ section, onSection }: { section: Section; onSection: (s: Section) => void }) {
+  return (
+    <span className="keys-mode" role="radiogroup" aria-label="Which specimens to show">
+      {SECTIONS.map((s) => (
+        <Chip key={s.id} toggle={false} role="radio" aria-checked={section === s.id} on={section === s.id} onClick={() => onSection(s.id)}>
+          {`${s.label} ${s.list.length}`}
+        </Chip>
+      ))}
+    </span>
+  );
+}
+
+function Gallery({ section }: { section: Section }) {
   const creature = useStore((s) => s.creature);
   const setCreature = useStore((s) => s.setCreature);
+  const list = SECTIONS.find((s) => s.id === section)!.list;
+  // one row up to five; more wrap into two rows of drawings
+  const cols = Math.max(4, list.length <= 5 ? list.length : Math.ceil(list.length / 2));
   return (
-    <div className="specimens">
-      {CREATURES.map((c) => (
+    <div className="specimens" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridAutoRows: "minmax(0, 1fr)" }}>
+      {list.map((c) => (
         <button key={c.id} className={`specimen${c.id === creature ? " on" : ""}`} onClick={() => setCreature(c.id)} aria-pressed={c.id === creature}>
           <Thumb def={c} />
           <span className="specimen-name">{c.name}</span>
@@ -71,6 +99,11 @@ function Calls({ def }: { def: CreatureDef }) {
             {c.name}
           </Chip>
         ))}
+        {def.group === "fantasy" && (
+          <Chip toggle={false} role="radio" aria-checked={keyCall === SING_WORDS} on={keyCall === SING_WORDS} onClick={() => setKeyCall(SING_WORDS)} title="Each key sings the next word of the Speak text, on its pitch">
+            Words
+          </Chip>
+        )}
       </div>
       <p className="creature-blurb">{def.blurb}</p>
     </div>
@@ -111,10 +144,11 @@ function Params({ def }: { def: CreatureDef }) {
 export function BestiaryRight() {
   const creature = useStore((s) => s.creature);
   const def = creatureById(creature);
+  const [section, setSection] = useState<Section>(() => sectionOf(def));
   return (
-    <div className="right right-bestiary">
-      <Screen className="s-gallery" title="Creatures" sub={`${CREATURES.length} specimens`}>
-        <Gallery />
+    <div className={`right right-bestiary${def?.group === "fantasy" ? " with-speak" : ""}`}>
+      <Screen className="s-gallery" title="Specimens" tools={<SectionTabs section={section} onSection={setSection} />}>
+        <Gallery section={section} />
       </Screen>
       <Screen className="s-wf" title="Spectrogram" sub="Waterfall of the call">
         <Spectrogram />
@@ -125,6 +159,11 @@ export function BestiaryRight() {
       <Screen className="s-cparams" title="Controls">
         {def && <Params def={def} />}
       </Screen>
+      {def?.group === "fantasy" && (
+        <Screen className="s-speak" title="Speak" sub="English in, its own language out">
+          <AlienSpeak key={def.id} def={def} />
+        </Screen>
+      )}
       <Screen className="s-airway" title="Airway" sub="Each tube unrolled">
         <CreatureTubes />
       </Screen>
