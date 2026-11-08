@@ -9,10 +9,11 @@
 import { chimeraModule } from "../wasm/chimera.ts";
 import { alienSpeak, planPhrases, type Phrase } from "../wasm/engine.ts";
 import type { BodyMix, CreatureTelemetry, Gesture } from "../wasm/types.ts";
-import { fromUtf8, utf8, writeGestures } from "../wasm/wire.ts";
+import { CONTROL_KEYS, fromUtf8, utf8, writeGestures } from "../wasm/wire.ts";
 import { g2p } from "../ui/g2p.ts";
 import { wordSpans } from "../ui/words.ts";
-import { PRESETS, defaultF0 } from "../ui/body.ts";
+import { PRESETS } from "../ui/body.ts";
+import { effective, humanSettings, type HumanVoiceSettings } from "./tune.ts";
 import { TeleTrack, TELE_VERSION } from "../show/tele.ts";
 import type { CastMember, Script } from "./script.ts";
 
@@ -76,6 +77,10 @@ interface Voice {
   member: CastMember;
   h: number;
   creature: CreatureInfo | null;
+  /** a human's settings, resolved */
+  human: HumanVoiceSettings | null;
+  /** an alien's settings (its own controls, and rate) */
+  alien: Record<string, number>;
   body: BodyMix;
   out: Float32Array;
   frames: Float32Array[];
@@ -98,12 +103,15 @@ export async function renderDialogue(script: Script, onProgress?: (done: number)
   const voices: Voice[] = script.cast.map((member) => {
     const h = x.engine_new(SAMPLE_RATE);
     let creature: CreatureInfo | null = null;
-    let body = PRESETS.male;
+    let human: HumanVoiceSettings | null = null;
+    let alien: Record<string, number> = {};
     if (member.voice.kind === "human") {
-      body = PRESETS[member.voice.body];
-      x.engine_set_body(h, body.female, body.child);
+      human = humanSettings(member.voice.body, member.tune);
+      tuneHuman(x, h, human);
     } else {
-      const bytes = utf8(JSON.stringify({ id: member.voice.id, params: member.pitch ? { pitch: member.pitch } : {} }));
+      alien = effective(member.tune, false);
+      const { rate: _, ...params } = alien;
+      const bytes = utf8(JSON.stringify({ id: member.voice.id, params }));
       const p = x.chimera_alloc(bytes.length);
       new Uint8Array(mem(), p, bytes.length).set(bytes);
       const status = x.engine_set_creature(h, p, bytes.length);
@@ -112,7 +120,7 @@ export async function renderDialogue(script: Script, onProgress?: (done: number)
       if (status !== 0) throw new Error(`${member.name}: ${v.error}`);
       creature = v as CreatureInfo;
     }
-    return { member, h, creature, body, out: new Float32Array(0), frames: [], ctele: [], lines: [], cues: [] };
+    return { member, h, creature, human, alien, body: human?.body ?? PRESETS.male, out: new Float32Array(0), frames: [], ctele: [], lines: [], cues: [] };
   });
 
   // lay out the lines: each starts when the one before has ended; a shared line starts everyone at once
@@ -183,14 +191,40 @@ function yieldToPage(): Promise<void> {
   });
 }
 
+/** the engine's source value slots (crates/chimera-wasm engine_set_source) and articulator slots */
+const SOURCE_KEYS = ["f0", "glide", "pressure", "breathiness", "tension", "fry", "roughness", "vibratoDepth", "vibratoRate", "drift", "voiced", "brightness"];
+const ARTIC_SLOT = { larynx: CONTROL_KEYS.indexOf("larynx"), epilarynx: CONTROL_KEYS.indexOf("epilarynx") };
+
+/** A human's body, voice quality and resting larynx, set before it speaks. */
+function tuneHuman(x: Exports, h: number, s: HumanVoiceSettings): void {
+  x.engine_set_body(h, s.body.female, s.body.child);
+  const values = () => new Float64Array(x.memory.buffer, x.engine_values(h), 32).fill(NaN);
+  const v = values();
+  const src: Record<string, number> = { f0: s.f0, ...s.source };
+  for (const [k, val] of Object.entries(src)) v[SOURCE_KEYS.indexOf(k)] = val;
+  x.engine_set_source(h);
+  const a = values();
+  a[ARTIC_SLOT.larynx] = s.artic.larynx;
+  a[ARTIC_SLOT.epilarynx] = s.artic.epilarynx;
+  x.engine_set_artic(h, 2);
+}
+
 /** Plan a human's line: English through the pronouncing dictionary; sung lines on one pitch. */
 function planHuman(x: Exports, v: Voice, text: string, sung: boolean, start: number): SaidLine | null {
   let phrases: Phrase[] = g2p.toPhrases(text);
   if (!phrases.length) return null;
-  const f0 = v.member.pitch ?? defaultF0(v.body);
+  const s = v.human!;
   const shaped = phrases.map((p) => (sung ? { ...p, intonation: "flat" as const, pause: Math.min(p.pause, 0.15) } : p));
-  const plan = planPhrases(shaped, { body: v.body, t0: 0, rate: sung ? 0.7 : 1, f0 });
-  const gestures = plan.gestures.map((g: Gesture) => ({ ...g, targets: { ...g.targets } }));
+  const plan = planPhrases(shaped, { body: s.body, t0: 0, rate: s.rate * (sung ? 0.7 : 1), f0: s.f0, accent: s.accent });
+  // speech sets the larynx on every vowel: the voice's larynx and twang ride on those targets
+  const gestures = plan.gestures.map((g: Gesture) => {
+    const t = { ...g.targets };
+    if (t.larynx !== undefined) {
+      t.larynx = Math.max(-1.5, Math.min(1.5, t.larynx + s.artic.larynx));
+      if (s.artic.epilarynx > 0) t.epilarynx = s.artic.epilarynx;
+    }
+    return { ...g, targets: t };
+  });
   v.cues.push({
     t: start,
     start: () => {
@@ -204,7 +238,7 @@ function planHuman(x: Exports, v: Voice, text: string, sung: boolean, start: num
 
 /** Plan an alien's line: the English becomes its language (the same word always the same). */
 function planAlien(x: Exports, v: Voice, text: string, sung: boolean, start: number): SaidLine | null {
-  const u = alienSpeak(v.member.voice.kind === "alien" ? v.member.voice.id : "", text, { pitch: v.member.pitch, sung });
+  const u = alienSpeak(v.member.voice.kind === "alien" ? v.member.voice.id : "", text, { pitch: v.alien.pitch, rate: v.alien.rate, sung });
   if (!u) return null;
   v.cues.push({
     t: start,

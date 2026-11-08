@@ -3,7 +3,7 @@
  *
  *   # the cast: a name, "=", a voice (male, female, child, or an alien's id), and optionally a pitch
  *   Ava = female
- *   Theo = male 105
+ *   Theo = male gravelly pitch 95 rate 0.9   ← presets and settings: see tune.ts
  *   Zorb = resonant
  *
  *   # the lines: one after another
@@ -16,15 +16,14 @@
  * Blank lines and lines starting with # are ignored. Names are matched without regard to case.
  */
 
-export type HumanBody = "male" | "female" | "child";
-export const HUMAN_BODIES: readonly HumanBody[] = ["male", "female", "child"];
+import { HUMAN_BODIES, NO_TUNE, formatTune, parseTune, variant, type HumanBody, type Tune } from "./tune.ts";
+export { HUMAN_BODIES, type HumanBody };
 
-/** A participant: a human body, or an alien (a Bestiary creature with a language). */
+/** A participant: a human body, or an alien (a Bestiary creature with a language), and how it's tuned. */
 export interface CastMember {
   name: string;
   voice: { kind: "human"; body: HumanBody } | { kind: "alien"; id: string };
-  /** baseline pitch (Hz), if given */
-  pitch?: number;
+  tune: Tune;
 }
 
 export interface Line {
@@ -64,15 +63,17 @@ export function parseScript(text: string, isAlien: (id: string) => boolean): { s
       return;
     }
 
-    const member = /^([^:=]+?)\s*=\s*([\w-]+)(?:\s+([\d.]+))?\s*$/.exec(s);
+    const member = /^([^:=]+?)\s*=\s*([\w-]+)((?:\s+[\w.-]+)*)\s*$/.exec(s);
     if (member) {
       const name = member[1].trim();
       const voice = member[2].toLowerCase();
-      const pitch = member[3] ? Number(member[3]) : undefined;
+      const words = member[3].trim() ? member[3].trim().split(/\s+/) : [];
       if (find(name) >= 0) return errors.push({ line: n, message: `${name} is already in the cast` });
-      if ((HUMAN_BODIES as readonly string[]).includes(voice)) cast.push({ name, voice: { kind: "human", body: voice as HumanBody }, pitch });
-      else if (isAlien(voice)) cast.push({ name, voice: { kind: "alien", id: voice }, pitch });
-      else errors.push({ line: n, message: `"${member[2]}" isn't a voice: use male, female, child or an alien` });
+      const human = (HUMAN_BODIES as readonly string[]).includes(voice);
+      if (!human && !isAlien(voice)) return errors.push({ line: n, message: `"${member[2]}" isn't a voice: use male, female, child or an alien` });
+      const { tune, errors: bad } = parseTune(words, human, human ? undefined : voice);
+      for (const m of bad) errors.push({ line: n, message: `${name}: ${m}` });
+      cast.push({ name, voice: human ? { kind: "human", body: voice as HumanBody } : { kind: "alien", id: voice }, tune });
       return;
     }
 
@@ -192,22 +193,38 @@ export function importScreenplay(text: string, voices: readonly string[] = VOICE
     words += n;
   }
 
-  const castText = characters.map((c, i) => `${c} = ${voices[i % voices.length]}`).join("\n");
+  // characters given the same voice are told apart (a little lower, rougher, breathier…)
+  const seen: Record<string, number> = {};
+  const castText = characters
+    .map((c, i) => {
+      const v = voices[i % voices.length];
+      const nth = (seen[v] = (seen[v] ?? -1) + 1);
+      const t = (HUMAN_BODIES as readonly string[]).includes(v) ? formatTune(variant(v as HumanBody, nth)) : "";
+      return `${c} = ${v}${t ? " " + t : ""}`;
+    })
+    .join("\n");
   const out = `# Cast: change who reads each part (male, female, child, or an alien)\n${castText}\n\n${kept.map((l) => `${l.name}: ${l.words}`).join("\n")}\n`;
   return { text: out, characters, lines: kept.length, words, dropped: { lines: droppedLines, characters: [...droppedNames] } };
 }
 
-/** The script with one cast member's voice changed (the cast line rewritten in place). */
-export function setVoice(text: string, name: string, voice: string): string {
+/** The script with one cast member's line rewritten in place: its voice and its tuning. */
+export function setMember(text: string, name: string, voice: string, tune: Tune = NO_TUNE): string {
   const lines = text.split("\n");
   const i = lines.findIndex((l) => {
     const m = /^\s*([^:=#]+?)\s*=\s*[\w-]+/.exec(l);
     return m && m[1].trim().toLowerCase() === name.toLowerCase();
   });
   if (i < 0) return text;
-  const pitch = /=\s*[\w-]+\s+([\d.]+)/.exec(lines[i])?.[1];
-  lines[i] = `${name} = ${voice}${pitch && HUMAN_BODIES.includes(voice as HumanBody) ? " " + pitch : ""}`;
+  const t = formatTune(tune);
+  lines[i] = `${name} = ${voice}${t ? " " + t : ""}`;
   return lines.join("\n");
+}
+
+/** A new voice for a part: a human keeps its tuning; switching to or from an alien starts fresh. */
+export function setVoice(text: string, member: CastMember, voice: string): string {
+  const wasHuman = member.voice.kind === "human";
+  const isHuman = (HUMAN_BODIES as readonly string[]).includes(voice);
+  return setMember(text, member.name, voice, wasHuman && isHuman ? member.tune : NO_TUNE);
 }
 
 /** Words of dialogue in a script, as the limit counts them. */
@@ -216,9 +233,9 @@ export function scriptWords(script: Script): number {
 }
 
 export const EXAMPLE_SCRIPT = `# The cast: a name = male, female, child, or an alien
-Ava = female
-Theo = male
-Zorb = resonant
+Ava = female lively
+Theo = male gravelly pitch 100
+Zorb = resonant slow
 
 # Then who says what, in order
 Ava: Hello? Is somebody there?

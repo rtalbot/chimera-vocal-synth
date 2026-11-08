@@ -13,7 +13,10 @@ import { VoiceModel } from "../ui/analysis.ts";
 import type { ViewFlags } from "../ui/render/anatomy.ts";
 import { CREATURES, alienLanguage, creatureById } from "../wasm/engine.ts";
 import { download, type Recording } from "../ui/record.ts";
-import { EXAMPLE_SCRIPT, HUMAN_BODIES, MAX_CAST, MAX_WORDS, importScreenplay, parseScript, scriptWords, setVoice, type CastMember } from "./script.ts";
+import { EXAMPLE_SCRIPT, HUMAN_BODIES, MAX_CAST, MAX_WORDS, importScreenplay, parseScript, scriptWords, setMember, setVoice, type CastMember } from "./script.ts";
+import { ALIEN_PRESETS, HUMAN_KNOBS, HUMAN_PRESETS, NO_TUNE, alienKnobs, knobValue, type Knob, type Tune } from "./tune.ts";
+import { Chip } from "../ui/components/Screen.tsx";
+import { Slider } from "../ui/components/Controls.tsx";
 import { lineAt, renderDialogue, type RenderedDialogue, type RenderedVoice } from "./render.ts";
 import { recordStage, type StagePanel } from "./stageRecorder.ts";
 
@@ -163,7 +166,7 @@ export function DialoguePage() {
               <input ref={fileInput} type="file" accept=".txt,.fountain,.md,.text,text/plain" hidden onChange={(e) => void openFile(e.target.files?.[0]).finally(() => (e.target.value = ""))} />
             </div>
             {notice && <p className="dim dialogue-notice">{notice}</p>}
-            <Cast cast={parsed.script.cast} onVoice={(name, v) => setText((t) => setVoice(t, name, v))} words={scriptWords(parsed.script)} />
+            <Cast cast={parsed.script.cast} onVoice={(m, v) => setText((t) => setVoice(t, m, v))} onTune={(m, tune) => setText((t) => setMember(t, m.name, m.voice.kind === "human" ? m.voice.body : m.voice.id, tune))} words={scriptWords(parsed.script)} />
             {parsed.errors.length > 0 && (
               <ul className="dialogue-errors">
                 {parsed.errors.map((er, i) => (
@@ -183,7 +186,7 @@ export function DialoguePage() {
               )}
             </div>
             <p className="dim dialogue-help">
-              <b>Name = voice</b> adds someone: male, female, child, or an alien ({ALIENS.map((c) => c.id).join(", ")}); a number after it sets the pitch. <b>Name: words</b> is a line; <b>Ava + Zorb:</b> say it together;{" "}
+              <b>Name = voice</b> adds someone: male, female, child, or an alien ({ALIENS.map((c) => c.id).join(", ")}); then presets and settings to shape it, like <b>gravelly slow pitch 95</b> (Tune shows them all, with sliders). <b>Name: words</b> is a line; <b>Ava + Zorb:</b> say it together;{" "}
               <b>Name sings:</b> holds one pitch; <b>(pause 1)</b> waits. Aliens say it in their own language.
             </p>
           </div>
@@ -222,36 +225,103 @@ export function DialoguePage() {
   );
 }
 
-/** Who reads each part: a voice for every character. */
-function Cast(props: { cast: CastMember[]; onVoice: (name: string, voice: string) => void; words: number }) {
+/** Who reads each part: a voice for every character, and its tuning. */
+function Cast(props: { cast: CastMember[]; onVoice: (m: CastMember, voice: string) => void; onTune: (m: CastMember, t: Tune) => void; words: number }) {
+  const [open, setOpen] = useState<string | null>(null);
   if (!props.cast.length) return null;
   return (
     <div className="dialogue-cast">
       {props.cast.map((m) => (
-        <div key={m.name} className="dialogue-cast-row">
-          <span className="dialogue-cast-name">{m.name}</span>
-          <select value={m.voice.kind === "human" ? m.voice.body : m.voice.id} onChange={(e) => props.onVoice(m.name, e.target.value)} aria-label={`Who reads ${m.name}`}>
-            <optgroup label="Human">
-              {HUMAN_BODIES.map((b) => (
-                <option key={b} value={b}>
-                  {{ male: "Adult male", female: "Adult female", child: "Child" }[b]}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="Alien (its own language)">
-              {ALIENS.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </optgroup>
-          </select>
+        <div key={m.name} className="dialogue-cast-member">
+          <div className="dialogue-cast-row">
+            <span className="dialogue-cast-name">{m.name}</span>
+            <select value={m.voice.kind === "human" ? m.voice.body : m.voice.id} onChange={(e) => props.onVoice(m, e.target.value)} aria-label={`Who reads ${m.name}`}>
+              <optgroup label="Human">
+                {HUMAN_BODIES.map((b) => (
+                  <option key={b} value={b}>
+                    {{ male: "Adult male", female: "Adult female", child: "Child" }[b]}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Alien (its own language)">
+                {ALIENS.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+            <button className={`ghost dialogue-tune-toggle${open === m.name ? " on" : ""}`} aria-expanded={open === m.name} onClick={() => setOpen(open === m.name ? null : m.name)} title={`Tune how ${m.name} sounds`}>
+              Tune{m.tune.presets.length + Object.keys(m.tune.set).length ? " •" : ""}
+            </button>
+            <Hear member={m} />
+          </div>
+          {open === m.name && <TunePanel member={m} onTune={(t) => props.onTune(m, t)} />}
         </div>
       ))}
       <span className="dim dialogue-cast-count">
         {props.cast.length}/{MAX_CAST} cast · {props.words}/{MAX_WORDS} words
       </span>
     </div>
+  );
+}
+
+const fmtKnob = (k: Knob) => (v: number) => (k.unit === "Hz" ? `${v.toFixed(0)} Hz` : k.unit === "×" ? `${v.toFixed(2)}×` : k.unit ? `${v.toFixed(1)} ${k.unit}` : `${Math.round(v * 100)}%`);
+
+/** Presets to toggle, and a slider for every setting (a slider moved writes the setting into the cast line). */
+function TunePanel({ member, onTune }: { member: CastMember; onTune: (t: Tune) => void }) {
+  const human = member.voice.kind === "human";
+  const knobs = human ? HUMAN_KNOBS : alienKnobs(member.voice.kind === "alien" ? member.voice.id : "");
+  const presets = human ? HUMAN_PRESETS : ALIEN_PRESETS;
+  const t = member.tune;
+  const base = member.voice.kind === "human" ? member.voice.body : undefined;
+  const alienId = member.voice.kind === "alien" ? member.voice.id : undefined;
+  const togglePreset = (p: string) => onTune({ ...t, presets: t.presets.includes(p) ? t.presets.filter((x) => x !== p) : [...t.presets, p] });
+  return (
+    <div className="dialogue-tune">
+      <div className="dialogue-presets" role="group" aria-label={`Presets for ${member.name}`}>
+        {Object.entries(presets).map(([p, d]) => (
+          <Chip key={p} on={t.presets.includes(p)} onClick={() => togglePreset(p)} title={d.about}>
+            {p}
+          </Chip>
+        ))}
+      </div>
+      <div className="dialogue-knobs">
+        {knobs.map((k) => (
+          <div key={k.key} title={k.hint} className={t.set[k.key] !== undefined ? "set" : undefined}>
+            <Slider label={k.label} value={knobValue(k, t, human, base, alienId)} min={k.min} max={k.max} log={k.log} onChange={(v) => onTune({ ...t, set: { ...t.set, [k.key]: Number(v.toFixed(k.unit === "Hz" ? 0 : 2)) } })} format={fmtKnob(k)} />
+          </div>
+        ))}
+      </div>
+      <button className="ghost" onClick={() => onTune(NO_TUNE)} disabled={!t.presets.length && !Object.keys(t.set).length}>
+        Reset {member.name}'s voice
+      </button>
+    </div>
+  );
+}
+
+/** Hear a character say a sample line, as tuned. */
+function Hear({ member }: { member: CastMember }) {
+  const [busy, setBusy] = useState(false);
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const hear = async () => {
+    setBusy(true);
+    try {
+      const d = await renderDialogue({ cast: [member], steps: [{ kind: "line", line: { speakers: [0], text: `Hello. My name is ${member.name}, and this is how I sound.`, sung: false } }] });
+      audio.current?.pause();
+      const url = URL.createObjectURL(new Blob([d.wav], { type: "audio/wav" }));
+      const a = new Audio(url);
+      a.onended = () => URL.revokeObjectURL(url);
+      audio.current = a;
+      await a.play();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="ghost" onClick={() => void hear()} disabled={busy} title={`Hear ${member.name} say a sample line`} aria-label={`Hear ${member.name}`}>
+      {busy ? "…" : "▶"}
+    </button>
   );
 }
 
