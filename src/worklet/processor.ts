@@ -176,6 +176,14 @@ class ChimeraProcessor extends AudioWorkletProcessor {
       case "stopCall":
         x.engine_stop_call(h);
         break;
+      case "speak": {
+        if (!this.creature) break;
+        const cap = x.engine_spoken_capacity(h);
+        const n = Math.min(cap, m.flat.length);
+        new Float64Array(this.mem, x.engine_spoken_buffer(h), cap).set(m.flat.length > n ? m.flat.slice(0, n) : m.flat);
+        x.engine_play_spoken(h, n, m.amp ?? NaN);
+        break;
+      }
     }
   }
 
@@ -250,7 +258,7 @@ class ChimeraProcessor extends AudioWorkletProcessor {
     }
     const source: Record<string, number> = {};
     for (const k of c.sources) source[k] = b[o++];
-    return { kind: "creature", id: c.id, params, gate, outRms, clock, tubes, source, call: call >= 0 ? c.calls[call] : null };
+    return { kind: "creature", id: c.id, params, gate, outRms, clock, tubes, source, call: call >= 0 ? c.calls[call] : call === -2 ? "speak" : null };
   }
 }
 

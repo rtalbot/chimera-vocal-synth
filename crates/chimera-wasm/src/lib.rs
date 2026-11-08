@@ -132,6 +132,9 @@ pub struct Handle {
     /// the creature's telemetry (sized when it is chosen) and its flat block
     ctele: Option<chimera::creatures::voice::CreatureTelemetry>,
     ctele_block: Vec<f64>,
+    /// a spoken utterance in its flat form (`creatures::language`), written by JS before
+    /// `engine_play_spoken`; sized when a creature is chosen
+    spoken: Vec<f64>,
 }
 
 #[unsafe(no_mangle)]
@@ -147,6 +150,7 @@ pub extern "C" fn engine_new(sample_rate: f64) -> *mut Handle {
         tele_labels: vec![0u8; 4 * 25],
         ctele: None,
         ctele_block: Vec::new(),
+        spoken: Vec::new(),
     });
     // size every telemetry buffer once, so later snapshots reuse them
     h.engine.telemetry(&mut h.tele);
@@ -496,6 +500,9 @@ pub unsafe extern "C" fn engine_set_creature(h: *mut Handle, ptr: *const u8, len
     let n = 4 + t.params.len() + t.tubes.iter().map(|tb| 2 * tb.areas.len()).sum::<usize>() + t.source.len();
     h.ctele_block = Vec::with_capacity(n);
     h.ctele = Some(t);
+    // the longest utterance the voice holds, every key full
+    let width = def.params.len() + 1 + def.events.len();
+    h.spoken = vec![0.0; chimera::creatures::voice::MAX_SPOKEN_KEYS * (3 + 2 * width)];
     api::set_result(Ok(info))
 }
 
@@ -535,8 +542,41 @@ pub unsafe extern "C" fn engine_stop_call(h: *mut Handle) {
     handle!(h).engine.stop_call();
 }
 
+/// The buffer for a spoken utterance's flat form (`engine_spoken_capacity` f64s); valid until the
+/// next creature switch.
+///
+/// # Safety
+/// `h` must be a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_spoken_buffer(h: *mut Handle) -> *mut f64 {
+    handle!(h).spoken.as_mut_ptr()
+}
+
+/// # Safety
+/// `h` must be a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_spoken_capacity(h: *mut Handle) -> usize {
+    handle!(h).spoken.len()
+}
+
+/// Play the first `len` f64s of the spoken buffer as an utterance (planned with the JSON API's
+/// `alienSpeak`); `amp` NaN: 1. Returns 1 when it loaded whole, 0 when cut short or no creature.
+/// Real time: allocates nothing.
+///
+/// # Safety
+/// `h` must be a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_play_spoken(h: *mut Handle, len: usize, amp: f64) -> u32 {
+    let h = handle!(h);
+    let len = len.min(h.spoken.len());
+    match h.engine.creature_mut() {
+        Some(c) => chimera::creatures::language::play_flat(c, &h.spoken[..len], opt(amp).unwrap_or(1.0)) as u32,
+        None => 0,
+    }
+}
+
 /// Take the creature's telemetry (resets its RMS measurements) into a flat f64 block: gate,
-/// outRms, clock, the active call's index (−1: none), the params in def order, then per tube (in
+/// outRms, clock, the active call's index (−1: none, −2: the spoken call), the params in def order, then per tube (in
 /// the switch's `tubes` order) its areas then its RMS, then the source values. Null when the human
 /// voice is playing.
 ///
@@ -552,6 +592,7 @@ pub unsafe extern "C" fn engine_creature_telemetry(h: *mut Handle) -> *const f64
     let b = &mut h.ctele_block;
     b.clear();
     let call = match (t.call, h.engine.creature()) {
+        (Some(id), _) if id == chimera::creatures::voice::SPOKEN_ID => -2.0,
         (Some(id), Some(c)) => c.def.call_index(id).map_or(-1.0, |i| i as f64),
         _ => -1.0,
     };

@@ -855,3 +855,32 @@ pub fn vowels(ctx: &Ctx, a: &[String]) -> Result<(), String> {
     ctx.write_wav(&wav_name(name), &out)?;
     Ok(())
 }
+
+/// An invented creature speaks English text in its own language (`creatures::language`).
+/// `render alien <creatureId> <out> ["text"] [pitch] [rate]`
+pub fn alien(ctx: &Ctx, a: &[String]) -> Result<(), String> {
+    use chimera::creatures::language::{SpeakOptions, language_of, load_and_play, speak};
+    let id = arg(a, 0, "resonant");
+    let out_stem = arg(a, 1, "out/alien");
+    let text = arg(a, 2, "Hello, traveller. Where are you going? We have waited for you!");
+    let def = creature_by_id(id).ok_or_else(|| format!("unknown creature {id}"))?;
+    let lang = language_of(id).ok_or_else(|| format!("{} has no language", def.name))?;
+    let opts = SpeakOptions { pitch: a.get(3).and_then(|x| x.parse().ok()), rate: a.get(4).and_then(|x| x.parse().ok()), sung: None };
+    let s = speak(def, text, &opts).ok_or("nothing to say")?;
+    let mut v = CreatureVoice::new(def, FS, &[]);
+    if !load_and_play(&mut v, &s, 1.0) {
+        println!("  (utterance cut: longer than the voice's room for keys)");
+    }
+    let n = js_round((s.duration + 0.8) * FS) as usize;
+    let mut out = vec![0f32; n];
+    for block in out.chunks_mut(128) {
+        v.render(block);
+    }
+    let bad = out.iter().filter(|x| !x.is_finite()).count();
+    let file = format!("{out_stem}.wav");
+    ctx.write_wav(&file, &out)?;
+    println!("{} in {}: {} keys, {} s, peak {}, non-finite {bad}", def.name, lang.name, s.keys.len(), fixed(s.duration, 2), fixed(peak(&out), 3));
+    println!("  \"{text}\"");
+    println!("  {}", s.alien_text());
+    Ok(())
+}

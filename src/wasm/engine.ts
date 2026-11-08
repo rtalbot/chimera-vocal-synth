@@ -7,7 +7,7 @@
 import { call } from "./chimera.ts";
 import { CREATURE_VISUALS } from "../ui/creatureVisuals.ts";
 import type {
-  ArticKey, ArticSpec, BeatPreset, BodyMix, BeatSound, BeatStep, CreatureDef, CreatureTelemetry, DemoSong, Gesture, HumanArtic, HumanBody,
+  AlienLanguage, AlienUtterance, ArticKey, ArticSpec, BeatPreset, BodyMix, BeatSound, BeatStep, CreatureDef, CreatureTelemetry, DemoSong, Gesture, HumanArtic, HumanBody,
   HumanFrame, Phrase, Plan, Segment, SungNote, Syllable, VoiceSource, VowelRef,
 } from "./types.ts";
 
@@ -256,6 +256,17 @@ export function airwayTransfer(m: AirwayModel, artic: HumanArtic): { freqs: numb
 // ------------------------------------------------------------------ creatures
 
 /** A creature's telemetry right after construction at these settings (drawn before audio starts). */
+/** An invented creature's language (null for real animals). */
+export function alienLanguage(id: string): AlienLanguage | null {
+  return call("alienLanguage", { id });
+}
+
+/** Plan English text in an invented creature's language (null when there is nothing to say);
+ *  `flat` is the utterance the worklet plays (`speak` message). */
+export function alienSpeak(id: string, text: string, options: { pitch?: number; rate?: number; sung?: boolean } = {}): AlienUtterance | null {
+  return call("alienSpeak", { id, text, options });
+}
+
 export function creaturePreview(id: string, params?: Record<string, number>): CreatureTelemetry {
   return call("creaturePreview", { id, params: params ?? {} });
 }

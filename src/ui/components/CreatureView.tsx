@@ -189,7 +189,7 @@ export function CreatureView() {
     // like a map's title: the name, the latin name, and what it is doing
     label(ctx, fit(ctx, def.name.toUpperCase(), w - 32, compact ? 18 : 24, 0.18), 16, compact ? 30 : 34, { size: compact ? 18 : 24, color: V.blue, ls: 0.18 });
     label(ctx, fit(ctx, def.latin.toUpperCase(), w - 34, 10, 0.16), 18, compact ? 48 : 54, { size: 10, color: V.blueMid, ls: 0.16 });
-    const state = live ? (live.call ? (def.calls.find((c) => c.id === live.call)?.name ?? live.call) : live.gate > 0.05 ? "Sustaining" : "At rest") : "Not started";
+    const state = live ? (live.call ? (def.calls.find((c) => c.id === live.call)?.name ?? (live.call === "speak" ? "Speaking" : live.call)) : live.gate > 0.05 ? "Sustaining" : "At rest") : "Not started";
     const pitchText = pp ? (() => { const f = fmtParam(pitch, pp); return `${f.value} ${f.unit}`.trim().toUpperCase(); })() : "";
     if (compact) {
       label(ctx, `${state.toUpperCase()}${pitchText ? "   " + pitchText : ""}`, 18, 70, { size: 11, color: V.amber, ls: 0.14 });

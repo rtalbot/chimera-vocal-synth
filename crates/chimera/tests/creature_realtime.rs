@@ -87,3 +87,33 @@ fn every_call_key_resolves() {
         }
     }
 }
+
+#[test]
+fn loading_and_playing_speech_does_not_allocate() {
+    use chimera::creatures::language::{SpeakOptions, language_of, speak};
+    chimera::creatures::init();
+    for def in CREATURES.iter().filter(|d| language_of(d.id).is_some()) {
+        // planning allocates (off the audio thread); loading it into the voice and playing must not
+        let s = speak(def, "Where are you going, traveller? We have waited for you!", &SpeakOptions::default()).unwrap();
+        let mut v = CreatureVoice::new(def, 48000.0, &[]);
+        let mut buf = vec![0.0f32; 4096];
+        v.render(&mut buf[..256]);
+        let before = allocs();
+        for _ in 0..2 {
+            v.spoken_clear();
+            for k in &s.keys {
+                assert!(v.spoken_push_key(k.t, k.curve));
+                for &(n, x) in &k.v {
+                    v.spoken_push_value(n, x);
+                }
+            }
+            v.play_spoken(1.0);
+            for _ in 0..20 {
+                v.render(&mut buf);
+            }
+            assert_eq!(v.active_call(), Some("speak"), "{}: the utterance is still playing", def.id);
+            v.stop_call();
+        }
+        assert_eq!(allocs() - before, 0, "{} allocated loading or playing speech", def.id);
+    }
+}

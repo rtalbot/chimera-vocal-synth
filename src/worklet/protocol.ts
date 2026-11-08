@@ -27,6 +27,8 @@ export type ToWorklet =
   | { type: "creature"; id: string; params?: Record<string, number> }
   | { type: "cparams"; values: Record<string, number> }
   | { type: "call"; id: string; pitch?: number; amp?: number }
+  /** an alien utterance in its flat form (engine.ts `alienSpeak`), played as the spoken call */
+  | { type: "speak"; flat: number[]; amp?: number }
   | { type: "stopCall" }
   /** beatbox sequencer: any subset of its state */
   | { type: "beat"; steps?: (BeatStep | null)[]; bpm?: number; swing?: number; playing?: boolean }

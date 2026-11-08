@@ -2574,6 +2574,14 @@ input[type="range"]::-moz-range-thumb {
   grid-template-areas: "gallery gallery" "wf wf" "calls cparams" "airway airway" "keys keys";
 }
 
+/* an alien also speaks: its Say form gets a row under the calls and controls */
+.right-bestiary.with-speak {
+  grid-template-rows: minmax(min-content, 196fr) minmax(min-content, 196fr) auto auto minmax(min-content, 150fr) auto;
+  grid-template-areas: "gallery gallery" "wf wf" "calls cparams" "speak speak" "airway airway" "keys keys";
+}
+
+.s-speak { grid-area: speak; }
+
 .s-gallery { grid-area: gallery; }
 .s-calls { grid-area: calls; }
 .s-cparams { grid-area: cparams; }
@@ -2749,6 +2757,10 @@ input[type="range"]::-moz-range-thumb {
     grid-template-rows: none;
     grid-template-areas: "gallery gallery" "wf wf" "calls cparams" "airway airway" "keys keys";
   }
+  .right-bestiary.with-speak {
+    grid-template-rows: none;
+    grid-template-areas: "gallery gallery" "wf wf" "calls cparams" "speak speak" "airway airway" "keys keys";
+  }
   .right-bestiary .screen-body {
     min-height: 190px;
   }
@@ -2764,6 +2776,9 @@ input[type="range"]::-moz-range-thumb {
   .right-bestiary {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "gallery" "wf" "calls" "cparams" "airway" "keys";
+  }
+  .right-bestiary.with-speak {
+    grid-template-areas: "gallery" "wf" "calls" "cparams" "speak" "airway" "keys";
   }
   .s-gallery .specimens {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2857,4 +2872,49 @@ input[type="range"]::-moz-range-thumb {
   .duet-head .screen-head {
     padding: 7px 8px 0;
   }
+}
+
+/* an alien speaking (AlienSpeak.tsx): the Say form inside the Bestiary's calls */
+.alien-say {
+  grid-template-rows: auto auto auto auto;
+}
+
+.alien-lang {
+  margin: 4px 0 0;
+}
+
+.alien-lang-name {
+  color: var(--blue);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-right: 6px;
+}
+
+.alien-word {
+  transition: color 0.08s, text-shadow 0.08s;
+}
+
+/* the word being said: the transliteration is amber already, so it lights white */
+.alien-word.now {
+  color: var(--white, #fff);
+  text-shadow: 0 0 6px rgba(255, 179, 64, 0.9);
+}
+
+.alien-english .alien-word.now {
+  color: var(--amber);
+}
+
+/* tones: a high syllable's vowel sits up, a low one's down, like a pitch trace */
+.tone-hi {
+  position: relative;
+  top: -0.35em;
+}
+
+.tone-lo {
+  position: relative;
+  top: 0.3em;
+}
+
+.alien-english {
+  margin: 0;
 }

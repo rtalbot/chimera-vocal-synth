@@ -7,7 +7,7 @@
 //! allocate nothing. Parameters and calls are addressed by index ([`CreatureDef::param_index`],
 //! [`CreatureDef::call_index`]).
 
-use super::types::{CallTarget, CreatureDef, CreatureSim, Curve, GateTimes};
+use super::types::{CallPlan, CallTarget, CreatureDef, CreatureSim, Curve, GateTimes, PlanKey};
 use crate::airway::decimator::Decimator;
 use crate::math::{PI, exp, js_max, js_min, js_round, js_sign, pow, sqrt, tanh};
 use serde::ser::{SerializeMap, Serializer};
@@ -92,12 +92,19 @@ impl Serialize for CreatureTelemetry {
 
 #[derive(Clone, Copy, Debug)]
 struct ActiveCall {
-    /// index into the def's calls
+    /// index into the def's calls, or [`SPOKEN`]
     call: usize,
     t0: f64,
     pitch: f64,
     amp: f64,
 }
+
+/// [`ActiveCall::call`] for the spoken call (an utterance loaded with [`CreatureVoice::spoken_push_key`]).
+const SPOKEN: usize = usize::MAX;
+/// The spoken call's id, as [`CreatureVoice::active_call`] reports it.
+pub const SPOKEN_ID: &str = "speak";
+/// Room for the longest utterance, in keys (a syllable takes two or three: about 350 syllables).
+pub const MAX_SPOKEN_KEYS: usize = 1024;
 
 const DEFAULT_GATE_TIMES: GateTimes = GateTimes { attack: 0.012, release: 0.06 };
 
@@ -122,6 +129,10 @@ pub struct CreatureVoice {
     call_gate: f64,
     pub clock: f64,
     call: Option<ActiveCall>,
+    /// the spoken call: preallocated (keys and their values) so loading one doesn't allocate;
+    /// `spoken_len` keys of it are in use
+    spoken: CallPlan,
+    spoken_len: usize,
     /// one-shot events already fired, per key of the active call (preallocated for the longest call)
     fired: Vec<bool>,
     dec: Decimator,
@@ -158,7 +169,14 @@ impl CreatureVoice {
             });
         }
         let rms_acc: Vec<Vec<f64>> = sim.tubes().iter().map(|(_, t)| vec![0.0; t.n]).collect();
-        let max_keys = def.calls.iter().map(|c| c.plan.keys.len()).max().unwrap_or(0);
+        let max_keys = def.calls.iter().map(|c| c.plan.keys.len()).max().unwrap_or(0).max(MAX_SPOKEN_KEYS);
+        let width = def.params.len() + 1 + def.events.len();
+        let spoken = CallPlan {
+            keys: (0..MAX_SPOKEN_KEYS).map(|_| PlanKey { t: 0.0, v: Vec::with_capacity(width), curve: None }).collect(),
+            names: Vec::with_capacity(width),
+            owns: Vec::with_capacity(def.params.len()),
+            owns_mask: vec![false; def.params.len()],
+        };
         let mut v = CreatureVoice {
             def,
             fs_out,
@@ -173,6 +191,8 @@ impl CreatureVoice {
             call_gate: 0.0,
             clock: 0.0,
             call: None,
+            spoken,
+            spoken_len: 0,
             fired: Vec::with_capacity(max_keys),
             dec: Decimator::new(m),
             ctrl_every,
@@ -218,7 +238,7 @@ impl CreatureVoice {
             }
             let v = js_min(d.max, js_max(d.min, x));
             self.performer[k] = v;
-            let owned = self.call.is_some_and(|c| self.def.calls[c.call].plan.owns_mask[k]);
+            let owned = self.call.is_some_and(|c| self.plan(c.call).owns_mask[k]);
             if !owned {
                 self.target[k] = v;
             }
@@ -255,10 +275,92 @@ impl CreatureVoice {
         self.end_call();
     }
 
+    /// The plan of a call index (a def call, or the spoken call).
+    fn plan(&self, call: usize) -> &CallPlan {
+        if call == SPOKEN { &self.spoken } else { &self.def.calls[call].plan }
+    }
+
+    // ---------------------------------------------------------------- the spoken call
+    // An utterance planned elsewhere (`creatures::language`) is loaded key by key into storage
+    // reserved when the voice was made, so loading and playing it allocate nothing.
+
+    /// Empty the spoken call (stopping it if it plays).
+    pub fn spoken_clear(&mut self) {
+        if self.call.is_some_and(|c| c.call == SPOKEN) {
+            self.end_call();
+        }
+        self.spoken_len = 0;
+    }
+
+    /// Append a key at `t` (s from the start; keys must come in time order). False when full.
+    pub fn spoken_push_key(&mut self, t: f64, curve: Option<Curve>) -> bool {
+        if self.spoken_len >= self.spoken.keys.len() {
+            return false;
+        }
+        let k = &mut self.spoken.keys[self.spoken_len];
+        k.t = if t.is_finite() { t } else { 0.0 };
+        k.curve = curve;
+        k.v.clear();
+        self.spoken_len += 1;
+        true
+    }
+
+    /// Set a value in the last key pushed (ignored with no key, a full key or a non-finite value).
+    pub fn spoken_push_value(&mut self, target: CallTarget, x: f64) {
+        if self.spoken_len == 0 || !x.is_finite() || target == CallTarget::Unknown {
+            return;
+        }
+        if let CallTarget::Param(i) = target
+            && i >= self.def.params.len()
+        {
+            return;
+        }
+        if let CallTarget::Event(Some(e)) = target
+            && e >= self.def.events.len()
+        {
+            return;
+        }
+        let k = &mut self.spoken.keys[self.spoken_len - 1];
+        if k.v.len() < k.v.capacity() && !k.v.iter().any(|(n, _)| *n == target) {
+            k.v.push((target, x));
+        }
+    }
+
+    /// Play the loaded utterance (`amp` scales its breath). Nothing happens when it is empty.
+    pub fn play_spoken(&mut self, amp: f64) {
+        if self.spoken_len == 0 {
+            return;
+        }
+        self.end_call();
+        // names and owned params, as `CallDef::resolve` finds them, into reserved storage
+        let sp = &mut self.spoken;
+        sp.names.clear();
+        sp.owns.clear();
+        sp.owns_mask.iter_mut().for_each(|m| *m = false);
+        for k in &sp.keys[..self.spoken_len] {
+            for &(n, _) in &k.v {
+                if !sp.names.contains(&n) && sp.names.len() < sp.names.capacity() {
+                    sp.names.push(n);
+                }
+                if let CallTarget::Param(i) = n
+                    && !sp.owns_mask[i]
+                {
+                    sp.owns_mask[i] = true;
+                    sp.owns.push(i);
+                }
+            }
+        }
+        self.fired.clear();
+        self.fired.resize(self.spoken_len, false);
+        self.call = Some(ActiveCall { call: SPOKEN, t0: self.clock, pitch: 1.0, amp });
+    }
+
     /// End the active call and hand its parameters back to the performer.
     fn end_call(&mut self) {
         if let Some(c) = self.call {
-            for &n in &self.def.calls[c.call].plan.owns {
+            let def = self.def;
+            let owns = if c.call == SPOKEN { &self.spoken.owns } else { &def.calls[c.call].plan.owns };
+            for &n in owns {
                 self.target[n] = self.performer[n];
             }
         }
@@ -268,22 +370,40 @@ impl CreatureVoice {
 
     pub fn active_call(&self) -> Option<&'static str> {
         let def = self.def;
-        self.call.map(|c| def.calls[c.call].id)
+        self.call.map(|c| if c.call == SPOKEN { SPOKEN_ID } else { def.calls[c.call].id })
     }
 
     /// Evaluate the active call's automation at the current clock (writes into targets).
     fn eval_call(&mut self) {
         let Some(c) = self.call else { return };
+        // the spoken plan lives in `self`: move it out while evaluating (no allocation), so the
+        // evaluation can write the rest of `self`
+        if c.call == SPOKEN {
+            let plan = std::mem::take(&mut self.spoken);
+            let n = self.spoken_len;
+            let ended = self.eval_plan(c, &plan.keys[..n], &plan.names);
+            self.spoken = plan;
+            if ended {
+                self.end_call();
+            }
+        } else {
+            let def = self.def;
+            let plan = &def.calls[c.call].plan;
+            if self.eval_plan(c, &plan.keys, &plan.names) {
+                self.end_call();
+            }
+        }
+    }
+
+    /// One evaluation of a call's keys at the current clock; true when it has finished.
+    fn eval_plan(&mut self, c: ActiveCall, keys: &[PlanKey], names: &[CallTarget]) -> bool {
         let t = self.clock - c.t0;
         let def = self.def;
-        let plan = &def.calls[c.call].plan;
-        let keys = &plan.keys;
         let last = &keys[keys.len() - 1];
         if t > last.t + 0.05 {
-            self.end_call();
-            return;
+            return true;
         }
-        for &n in &plan.names {
+        for &n in names {
             // find surrounding keys that define n
             let mut prev: Option<(f64, f64)> = None;
             let mut next: Option<(f64, f64, Option<Curve>)> = None;
@@ -333,6 +453,7 @@ impl CreatureVoice {
             }
             self.fired[i] = true;
         }
+        false
     }
 
     fn control(&mut self) {
