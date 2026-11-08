@@ -4,7 +4,9 @@
  */
 import { engine } from "../audio/AudioEngine.ts";
 
-const TYPES = ["video/mp4;codecs=avc3,mp4a.40.2", "video/mp4;codecs=avc1,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"];
+// avc1, not avc3: X (and other sites) refuse avc3 ("incompatible video codecs"). avc1 can't change
+// size mid-recording, so the canvas recorded must keep its size: the dialogue's composite is fixed.
+const TYPES = ["video/mp4;codecs=avc1,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"];
 
 export interface Recording {
   stop(): void;
