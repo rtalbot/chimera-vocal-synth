@@ -18,7 +18,7 @@ import { EMOTIONS } from "./emotion.ts";
 import { ALIEN_PRESETS, HUMAN_KNOBS, HUMAN_PRESETS, NO_TUNE, alienKnobs, knobValue, type Knob, type Tune } from "./tune.ts";
 import { Chip } from "../ui/components/Screen.tsx";
 import { Slider } from "../ui/components/Controls.tsx";
-import { lineAt, renderDialogue, type RenderedDialogue, type RenderedVoice } from "./render.ts";
+import { lineAt, renderDialogue, scriptLineAt, type RenderedDialogue, type RenderedVoice, type ScriptLine } from "./render.ts";
 import { recordStage, type StagePanel } from "./stageRecorder.ts";
 
 const STORE_KEY = "chimera.dialogue.script";
@@ -47,6 +47,9 @@ export function DialoguePage() {
   const rec = useRef<Recording | null>(null);
   const abort = useRef<AbortController | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /** the Script screen: the text to edit, or the lines as they play */
+  const [view, setView] = useState<"edit" | "lines">("edit");
+  const [withScript, setWithScript] = useState(true);
   const fileInput = useRef<HTMLInputElement>(null);
 
   /** a screenplay in: the characters become the cast, their lines the dialogue */
@@ -116,15 +119,20 @@ export function DialoguePage() {
     transport.pause();
     transport.seek(0);
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-    const r = recordStage(stage, transport, (file, ext) => download(file, `chimera-dialogue-${stamp}.${ext}`));
+    const r = recordStage(stage, transport, (file, ext) => download(file, `chimera-dialogue-${stamp}.${ext}`), withScript ? show.script : undefined);
+    setView("lines");
     if (!r) return setError("This browser can't record video");
     rec.current = r;
     setRecording(true);
     transport.play();
+    // a hidden tab stops drawing (the browser pauses animation), so the video would freeze
+    const onHidden = () => document.hidden && rec.current === r && setNotice("The video stops moving while this tab is hidden: keep it in front until the recording finishes, or record again.");
+    document.addEventListener("visibilitychange", onHidden);
     // stop with the dialogue
     const off = transport.subscribe(() => {
       if (!transport.isPlaying && rec.current === r) {
         off();
+        document.removeEventListener("visibilitychange", onHidden);
         stopRecording();
       }
     });
@@ -141,7 +149,24 @@ export function DialoguePage() {
         <span className="duet-title">Dialogue</span>
       </header>
       <div className="dialogue-main">
-        <Screen className="dialogue-script" title="Script" sub="Cast, then lines">
+        <Screen
+          className="dialogue-script"
+          title="Script"
+          sub={view === "edit" ? "Cast, then lines" : "As it plays"}
+          tools={
+            <span className="keys-mode" role="radiogroup" aria-label="Script view">
+              <Chip toggle={false} role="radio" aria-checked={view === "edit"} on={view === "edit"} onClick={() => setView("edit")}>
+                Edit
+              </Chip>
+              <Chip toggle={false} role="radio" aria-checked={view === "lines"} on={view === "lines"} disabled={!show} onClick={() => setView("lines")} title={show ? "The lines as they play: click one to go there" : "Render first"}>
+                Lines
+              </Chip>
+            </span>
+          }
+        >
+          {view === "lines" && show && transport ? (
+            <ScriptLines lines={show.script} transport={transport} />
+          ) : (
           <div className="dialogue-editor">
             <textarea
               value={text}
@@ -191,6 +216,7 @@ export function DialoguePage() {
               <b>Name sings:</b> holds one pitch; <b>(pause 1)</b> waits. Aliens say it in their own language.
             </p>
           </div>
+          )}
         </Screen>
         <main className="dialogue-stage" style={{ "--voices": Math.min(4, Math.max(1, castNow)), "--rows": castNow > 4 ? 2 : 1 } as React.CSSProperties}>
           {show && transport ? (
@@ -201,7 +227,7 @@ export function DialoguePage() {
         </main>
       </div>
       <footer className="duet-bar">
-        <button className="primary large" disabled={!show || recording} onClick={() => (st.playing ? transport?.pause() : transport?.play())}>
+        <button className="primary large" disabled={!show || recording} onClick={() => (st.playing ? transport?.pause() : (setView("lines"), transport?.play()))}>
           {st.playing ? "Pause" : st.duration > 0 && st.time >= st.duration - 0.05 ? "Again" : "Play"}
         </button>
         <span className="duet-time">
@@ -218,7 +244,10 @@ export function DialoguePage() {
           onChange={(e) => transport?.seek(Number(e.target.value))}
           style={{ "--pos": `${st.duration ? (100 * st.time) / st.duration : 0}%` } as React.CSSProperties}
         />
-        <button className={recording ? "primary large" : "ghost"} disabled={!show} onClick={record} title="Play the dialogue from the start and save it, every head and the sound, as a video">
+        <label className="dialogue-with-script" title="Put the script beside the heads in the video, the line being said lit">
+          <input type="checkbox" checked={withScript} onChange={(e) => setWithScript(e.target.checked)} disabled={recording} /> Script in video
+        </label>
+        <button className={recording ? "primary large" : "ghost"} disabled={!show} onClick={record} title="Play the dialogue from the start and save it, every head and the sound, as a video (keep this tab in front while it records)">
           {recording ? "● Stop recording" : "● Record video"}
         </button>
       </footer>
@@ -323,6 +352,43 @@ function Hear({ member }: { member: CastMember }) {
     <button className="ghost" onClick={() => void hear()} disabled={busy} title={`Hear ${member.name} say a sample line`} aria-label={`Hear ${member.name}`}>
       {busy ? "…" : "▶"}
     </button>
+  );
+}
+
+/** The script as it plays: every line, the one being said lit and kept in view; click one to go there. */
+function ScriptLines({ lines, transport }: { lines: readonly ScriptLine[]; transport: Transport }) {
+  const [now, setNow] = useState(-1);
+  const box = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    const loop = () => {
+      const i = scriptLineAt(lines, transport.time());
+      setNow((p) => (p === i ? p : i));
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [lines, transport]);
+  useEffect(() => {
+    const el = box.current, item = el?.children[now] as HTMLElement | undefined;
+    if (!el || !item) return;
+    // scroll the list only (not the page): the line a third of the way down
+    el.scrollTo({ top: Math.max(0, item.offsetTop - el.offsetTop - el.clientHeight / 3), behavior: "smooth" });
+  }, [now]);
+  return (
+    <ol className="dialogue-lines" ref={box}>
+      {lines.map((l, i) => (
+        <li key={i} className={i === now ? "now" : now >= 0 && i < now ? "said" : undefined} aria-current={i === now ? "true" : undefined}>
+          <button onClick={() => transport.seek(l.t0)} title="Go to this line">
+            <span className="dialogue-line-who">
+              {l.speakers.join(" + ")}
+              {l.mood && <span className="dialogue-mood"> ({l.mood})</span>}
+            </span>
+            <span className="dialogue-line-text">{l.text}</span>
+          </button>
+        </li>
+      ))}
+    </ol>
   );
 }
 

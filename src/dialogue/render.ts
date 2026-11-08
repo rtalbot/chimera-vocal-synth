@@ -66,6 +66,23 @@ export interface RenderedDialogue {
   /** the mix, as a WAV file */
   wav: ArrayBuffer;
   voices: RenderedVoice[];
+  /** every line in script order, with who says it and when: the script as it plays */
+  script: ScriptLine[];
+}
+
+export interface ScriptLine {
+  speakers: string[];
+  text: string;
+  mood?: string;
+  t0: number;
+  t1: number;
+}
+
+/** The script line being said at time t (the last one started, until the next starts), or −1. */
+export function scriptLineAt(lines: readonly ScriptLine[], t: number): number {
+  let i = -1;
+  for (let k = 0; k < lines.length && lines[k].t0 <= t + 0.02; k++) i = k;
+  return i >= 0 && t <= lines[i].t1 + 0.35 ? i : -1;
 }
 
 interface CreatureInfo {
@@ -129,6 +146,7 @@ export async function renderDialogue(script: Script, onProgress?: (done: number)
 
   // lay out the lines: each starts when the one before has ended; a shared line starts everyone at once
   let t = LEAD_IN;
+  const scriptLines: ScriptLine[] = [];
   for (const step of script.steps) {
     if (step.kind === "pause") {
       t += step.seconds;
@@ -144,6 +162,7 @@ export async function renderDialogue(script: Script, onProgress?: (done: number)
       v.lines.push(said);
       end = Math.max(end, said.t1);
     }
+    if (end > start) scriptLines.push({ speakers: line.speakers.map((k) => voices[k].member.name), text: line.text, ...(line.mood ? { mood: formatMood(line.mood) } : {}), t0: start, t1: end });
     t = end + GAP;
   }
   const duration = t - GAP + TAIL;
@@ -182,7 +201,7 @@ export async function renderDialogue(script: Script, onProgress?: (done: number)
     alien: v.creature ? v.ctele : undefined,
   }));
   for (const v of voices) x.engine_free(v.h);
-  return { sampleRate: SAMPLE_RATE, hop: HOP, duration: total / SAMPLE_RATE, wav: wavFile(mix(voices.map((v) => v.out)), SAMPLE_RATE), voices: rendered };
+  return { sampleRate: SAMPLE_RATE, hop: HOP, duration: total / SAMPLE_RATE, wav: wavFile(mix(voices.map((v) => v.out)), SAMPLE_RATE), voices: rendered, script: scriptLines };
 }
 
 /** Let the page draw and take input between stretches of rendering. A message is used, not a
