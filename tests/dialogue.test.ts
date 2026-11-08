@@ -12,6 +12,7 @@ const { parseScript, importScreenplay, setVoice, MAX_CAST, MAX_WORDS } = await i
 const { renderDialogue, lineAt, HOP, SAMPLE_RATE } = await import("../src/dialogue/render.ts");
 const { g2p } = await import("../src/ui/g2p.ts");
 const await_tune = await import("../src/dialogue/tune.ts");
+const await_emotion = await import("../src/dialogue/emotion.ts");
 g2p.setDictionaryText(gunzipSync(readFileSync(new URL("../public/data/cmudict.txt.gz", import.meta.url))).toString());
 const isAlien = (id: string) => ["resonant", "whistler"].includes(id);
 
@@ -215,5 +216,92 @@ describe("voice tuning", () => {
     expect(low).toBeGreaterThan(100);
     expect(low).toBeLessThan(150);
     expect(high / low).toBeGreaterThan(2);
+  }, 60_000);
+});
+
+describe("emotion", () => {
+  const { parseMood, moodShift, emotionOf, formatMood } = await_emotion;
+
+  test("emotions, everyday words and adverbs, strengths, and mixtures", () => {
+    expect(emotionOf("sobbing")).toBe("crying");
+    expect(emotionOf("angrily")).toBe("angry");
+    expect(emotionOf("Excitedly")).toBe("excited");
+    expect(emotionOf("to Dev")).toBeNull();
+    const { mood, unknown } = parseMood("a little sad, very angry, whispering 0.3, to Dev");
+    expect(mood!.parts).toEqual([
+      { emotion: "sad", strength: 0.4 },
+      { emotion: "angry", strength: 1 },
+      { emotion: "whispering", strength: 0.3 },
+    ]);
+    expect(unknown).toEqual(["to Dev"]);
+    expect(parseMood(formatMood(mood!)).mood).toEqual(mood);
+    // stronger is further: pitch up more, faster
+    const some = moodShift(parseMood("a little excited").mood), lots = moodShift(parseMood("very excited").mood);
+    expect(lots.pitchBy).toBeGreaterThan(some.pitchBy);
+    expect(some.pitchBy).toBeGreaterThan(1);
+  });
+
+  test("a line's mood: after the speaker, at the start of the words, or not an emotion", () => {
+    const { script, errors } = parseScript("Ava = female\nAva (very sad): I know.\nAva: (sobbing) I know.\nAva (O.S.): Hm.", isAlien);
+    expect(script.steps.slice(0, 2).map((s) => s.kind === "line" && s.line.mood?.parts[0])).toEqual([
+      { emotion: "sad", strength: 1 },
+      { emotion: "crying", strength: 0.75 },
+    ]);
+    expect(script.steps[1].kind === "line" && script.steps[1].line.text).toBe("I know.");
+    expect(errors.map((e) => e.line)).toEqual([4]);
+  });
+
+  test("a screenplay's directions become moods, and a new one splits the speech", () => {
+    const im = importScreenplay(`                    MARA
+          (quietly)
+          It's back.
+          (beat)
+          The same signal.
+          (suddenly furious)
+          Why didn't you tell me?
+
+                    DEV
+          (to Mara)
+          I didn't know.`);
+    const lines = parseScript(im.text, isAlien).script.steps.map((s) => (s.kind === "line" ? [s.line.text, s.line.mood?.parts.map((p) => p.emotion).join("+") ?? ""] : null));
+    expect(lines).toEqual([
+      ["It's back. The same signal.", "calm"],
+      ["Why didn't you tell me?", "furious"],
+      ["I didn't know.", ""],
+    ]);
+  });
+
+  test("a mood changes how the line sounds, for that line only", async () => {
+    const { script } = parseScript("A = male\nA: Where were you yesterday?\nA (furious): Where were you yesterday?\nA (very sad): Where were you yesterday?\nA: Where were you yesterday?\nA (whispering): Where were you yesterday?", isAlien);
+    const d = await renderDialogue(script);
+    const v = d.voices[0], tr = v.human!;
+    const pcm = new Int16Array(d.wav, 44);
+    const at = (k: number) => {
+      const l = v.lines[k];
+      let e = 0, de = 0;
+      for (let i = Math.floor(l.t0 * SAMPLE_RATE) + 1; i < l.t1 * SAMPLE_RATE; i++) {
+        e += pcm[i] ** 2;
+        de += (pcm[i] - pcm[i - 1]) ** 2;
+      }
+      const fr: number[] = [];
+      for (let i = tr.indexAt(l.t0); i < tr.indexAt(l.t1); i++) {
+        const t = tr.message(i).t;
+        if (t.voicing > 0.5) fr.push(t.f0);
+      }
+      return { dur: l.t1 - l.t0, rms: Math.sqrt(e / ((l.t1 - l.t0) * SAMPLE_RATE)), bright: de / e, f0: fr.reduce((a, b) => a + b, 0) / Math.max(1, fr.length), voiced: fr.length };
+    };
+    const [plain, furious, sad, again, whisper] = [0, 1, 2, 3, 4].map(at);
+    expect(furious.rms).toBeGreaterThan(plain.rms * 1.5);
+    expect(furious.bright).toBeGreaterThan(plain.bright * 1.5);
+    expect(sad.f0).toBeLessThan(plain.f0 * 0.95);
+    expect(sad.dur).toBeGreaterThan(plain.dur * 1.1);
+    expect(sad.rms).toBeLessThan(plain.rms);
+    // the mood lasts its line: said plainly again, it's as before
+    expect(Math.abs(again.f0 / plain.f0 - 1)).toBeLessThan(0.02);
+    expect(again.rms / plain.rms).toBeGreaterThan(0.9);
+    expect(again.rms / plain.rms).toBeLessThan(1.1);
+    // a whisper has no voice in it
+    expect(whisper.voiced).toBeLessThan(plain.voiced * 0.2);
+    expect(v.lines[1].mood).toBe("furious");
   }, 60_000);
 });

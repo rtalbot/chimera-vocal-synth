@@ -7,13 +7,15 @@
  * Rendering ahead means any number of voices (no real-time budget), and the replay is exact.
  */
 import { chimeraModule } from "../wasm/chimera.ts";
-import { alienSpeak, planPhrases, type Phrase } from "../wasm/engine.ts";
+import { alienSpeak, creatureById, planPhrases, type Phrase } from "../wasm/engine.ts";
 import type { BodyMix, CreatureTelemetry, Gesture } from "../wasm/types.ts";
 import { CONTROL_KEYS, fromUtf8, utf8, writeGestures } from "../wasm/wire.ts";
 import { g2p } from "../ui/g2p.ts";
 import { wordSpans } from "../ui/words.ts";
 import { PRESETS } from "../ui/body.ts";
 import { effective, humanSettings, type HumanVoiceSettings } from "./tune.ts";
+import { formatMood, moodShift, withMood } from "./emotion.ts";
+import type { Line } from "./script.ts";
 import { TeleTrack, TELE_VERSION } from "../show/tele.ts";
 import type { CastMember, Script } from "./script.ts";
 
@@ -43,6 +45,8 @@ export interface SaidLine {
   text: string;
   /** the alien's own words for it, if an alien */
   alien?: string;
+  /** how it was said, as written ("very sad") */
+  mood?: string;
   words: SaidWord[];
 }
 
@@ -135,7 +139,7 @@ export async function renderDialogue(script: Script, onProgress?: (done: number)
     let end = start;
     for (const k of line.speakers) {
       const v = voices[k];
-      const said = v.creature ? planAlien(x, v, line.text, line.sung, start) : planHuman(x, v, line.text, line.sung, start);
+      const said = v.creature ? planAlien(x, v, line, start) : planHuman(x, v, line, start);
       if (!said) continue;
       v.lines.push(said);
       end = Math.max(end, said.t1);
@@ -198,22 +202,28 @@ const ARTIC_SLOT = { larynx: CONTROL_KEYS.indexOf("larynx"), epilarynx: CONTROL_
 /** A human's body, voice quality and resting larynx, set before it speaks. */
 function tuneHuman(x: Exports, h: number, s: HumanVoiceSettings): void {
   x.engine_set_body(h, s.body.female, s.body.child);
-  const values = () => new Float64Array(x.memory.buffer, x.engine_values(h), 32).fill(NaN);
-  const v = values();
-  const src: Record<string, number> = { f0: s.f0, ...s.source };
-  for (const [k, val] of Object.entries(src)) v[SOURCE_KEYS.indexOf(k)] = val;
-  x.engine_set_source(h);
-  const a = values();
+  setSource(x, h, s);
+  const a = new Float64Array(x.memory.buffer, x.engine_values(h), 32).fill(NaN);
   a[ARTIC_SLOT.larynx] = s.artic.larynx;
   a[ARTIC_SLOT.epilarynx] = s.artic.epilarynx;
   x.engine_set_artic(h, 2);
 }
 
+/** The voice quality (and resting pitch) a line is said with. */
+function setSource(x: Exports, h: number, s: HumanVoiceSettings): void {
+  const v = new Float64Array(x.memory.buffer, x.engine_values(h), 32).fill(NaN);
+  const src: Record<string, number> = { f0: s.f0, ...s.source };
+  for (const [k, val] of Object.entries(src)) v[SOURCE_KEYS.indexOf(k)] = val;
+  x.engine_set_source(h);
+}
+
 /** Plan a human's line: English through the pronouncing dictionary; sung lines on one pitch. */
-function planHuman(x: Exports, v: Voice, text: string, sung: boolean, start: number): SaidLine | null {
+function planHuman(x: Exports, v: Voice, line: Line, start: number): SaidLine | null {
+  const { text, sung } = line;
   let phrases: Phrase[] = g2p.toPhrases(text);
   if (!phrases.length) return null;
-  const s = v.human!;
+  // the voice for this line: the speaker's own, moved by the line's mood
+  const s = withMood(v.human!, line.mood);
   const shaped = phrases.map((p) => (sung ? { ...p, intonation: "flat" as const, pause: Math.min(p.pause, 0.15) } : p));
   const plan = planPhrases(shaped, { body: s.body, t0: 0, rate: s.rate * (sung ? 0.7 : 1), f0: s.f0, accent: s.accent });
   // speech sets the larynx on every vowel: the voice's larynx and twang ride on those targets
@@ -228,17 +238,23 @@ function planHuman(x: Exports, v: Voice, text: string, sung: boolean, start: num
   v.cues.push({
     t: start,
     start: () => {
+      // every line sets its voice: a mood lasts its line, the next line is said as it is
+      setSource(x, v.h, s);
       const n = writeGestures(x.memory.buffer, x.engine_records(v.h), gestures, MAX_GESTURES);
       x.engine_schedule(v.h, n, 0, 0);
     },
   });
   const words = wordSpans(shaped, plan).map((w) => ({ text: w.text, shown: w.text, t0: start + w.t0, t1: start + w.t1 }));
-  return { t0: start, t1: start + plan.end, text, words };
+  return { t0: start, t1: start + plan.end, text, words, ...(line.mood ? { mood: formatMood(line.mood) } : {}) };
 }
 
 /** Plan an alien's line: the English becomes its language (the same word always the same). */
-function planAlien(x: Exports, v: Voice, text: string, sung: boolean, start: number): SaidLine | null {
-  const u = alienSpeak(v.member.voice.kind === "alien" ? v.member.voice.id : "", text, { pitch: v.alien.pitch, rate: v.alien.rate, sung });
+function planAlien(x: Exports, v: Voice, line: Line, start: number): SaidLine | null {
+  const { text, sung } = line;
+  // a mood moves an alien's pitch and speed (its language's tones ride on them)
+  const k = moodShift(line.mood);
+  const base = v.alien.pitch ?? creatureById(v.member.voice.kind === "alien" ? v.member.voice.id : "")?.params.find((p) => p.key === "pitch")?.default;
+  const u = alienSpeak(v.member.voice.kind === "alien" ? v.member.voice.id : "", text, { pitch: base !== undefined ? base * k.pitchBy : undefined, rate: (v.alien.rate ?? 1) * k.rateBy, sung });
   if (!u) return null;
   v.cues.push({
     t: start,
@@ -250,7 +266,7 @@ function planAlien(x: Exports, v: Voice, text: string, sung: boolean, start: num
     },
   });
   const words = u.words.map((w) => ({ text: w.text, shown: w.alien, t0: start + w.t0, t1: start + w.t1 }));
-  return { t0: start, t1: start + u.duration, text, alien: u.alien, words };
+  return { t0: start, t1: start + u.duration, text, alien: u.alien, words, ...(line.mood ? { mood: formatMood(line.mood) } : {}) };
 }
 
 /** One frame of a human's telemetry, in the recorded track's layout (see show/tele.ts). */

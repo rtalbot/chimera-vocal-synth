@@ -3081,6 +3081,10 @@ input[type="range"]::-moz-range-thumb {
   line-height: 1.4;
 }
 
+.dialogue-mood {
+  font-style: italic;
+}
+
 .dialogue-caption p {
   margin: 0;
 }

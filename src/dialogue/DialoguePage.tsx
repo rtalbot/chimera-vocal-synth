@@ -14,6 +14,7 @@ import type { ViewFlags } from "../ui/render/anatomy.ts";
 import { CREATURES, alienLanguage, creatureById } from "../wasm/engine.ts";
 import { download, type Recording } from "../ui/record.ts";
 import { EXAMPLE_SCRIPT, HUMAN_BODIES, MAX_CAST, MAX_WORDS, importScreenplay, parseScript, scriptWords, setMember, setVoice, type CastMember } from "./script.ts";
+import { EMOTIONS } from "./emotion.ts";
 import { ALIEN_PRESETS, HUMAN_KNOBS, HUMAN_PRESETS, NO_TUNE, alienKnobs, knobValue, type Knob, type Tune } from "./tune.ts";
 import { Chip } from "../ui/components/Screen.tsx";
 import { Slider } from "../ui/components/Controls.tsx";
@@ -186,7 +187,7 @@ export function DialoguePage() {
               )}
             </div>
             <p className="dim dialogue-help">
-              <b>Name = voice</b> adds someone: male, female, child, or an alien ({ALIENS.map((c) => c.id).join(", ")}); then presets and settings to shape it, like <b>gravelly slow pitch 95</b> (Tune shows them all, with sliders). <b>Name: words</b> is a line; <b>Ava + Zorb:</b> say it together;{" "}
+              <b>Name = voice</b> adds someone: male, female, child, or an alien ({ALIENS.map((c) => c.id).join(", ")}); then presets and settings to shape it, like <b>gravelly slow pitch 95</b> (Tune shows them all, with sliders). <b>Name: words</b> is a line; <b>Ava + Zorb:</b> say it together; <b>Ava (very sad):</b> how it's said ({Object.keys(EMOTIONS).join(", ")}, or words like upset or sobbing; <i>a little</i> or <i>very</i> for how much);{" "}
               <b>Name sings:</b> holds one pitch; <b>(pause 1)</b> waits. Aliens say it in their own language.
             </p>
           </div>
@@ -382,6 +383,7 @@ function Caption({ voice, transport }: { voice: RenderedVoice; transport: Transp
       {now ? (
         <>
           <p>
+            {now.line.mood && <span className="dim dialogue-mood">({now.line.mood}) </span>}
             {now.line.words.map((w, i) => (
               <span key={i} className={`alien-word${i === now.word ? " now" : ""}`}>
                 {w.shown}{" "}
