@@ -27,6 +27,9 @@ export class Transport {
   epoch = 0;
   private readonly listeners = new Set<() => void>();
 
+  /** made when a recording first asks: what plays then passes through here to the speakers */
+  private out: GainNode | null = null;
+
   constructor(ctx: AudioContext = new AudioContext({ latencyHint: "playback" })) {
     this.ctx = ctx;
     this.ctx.onstatechange = () => {
@@ -116,10 +119,26 @@ export class Transport {
     void this.ctx.close().catch(() => {});
   }
 
+  /** A live stream of what plays, for recording; call stop() when done to unhook it. */
+  outputStream(): { stream: MediaStream; stop: () => void } {
+    if (!this.out) {
+      this.out = this.ctx.createGain();
+      this.out.connect(this.ctx.destination);
+      if (this.src) {
+        this.src.disconnect();
+        this.src.connect(this.out);
+      }
+    }
+    const out = this.out;
+    const dest = this.ctx.createMediaStreamDestination();
+    out.connect(dest);
+    return { stream: dest.stream, stop: () => out.disconnect(dest) };
+  }
+
   private startSource(): void {
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;
-    src.connect(this.ctx.destination);
+    src.connect(this.out ?? this.ctx.destination);
     src.onended = () => {
       if (this.src === src) this.rendered = true;
     };

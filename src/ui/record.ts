@@ -4,15 +4,15 @@
  */
 import { engine } from "../audio/AudioEngine.ts";
 
-const TYPES = ["video/mp4;codecs=avc1,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"];
+const TYPES = ["video/mp4;codecs=avc3,mp4a.40.2", "video/mp4;codecs=avc1,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"];
 
 export interface Recording {
   stop(): void;
 }
 
-/** Start recording `canvas` with the engine's output; `done` gets the file when it stops. */
-export function recordClip(canvas: HTMLCanvasElement, done: (file: Blob, ext: string) => void): Recording | null {
-  const audio = engine.outputStream();
+/** Start recording `canvas` with a sound (the live engine's output unless given); `done` gets the
+ *  file when it stops. */
+export function recordClip(canvas: HTMLCanvasElement, done: (file: Blob, ext: string) => void, audio = engine.outputStream()): Recording | null {
   if (!audio || typeof MediaRecorder === "undefined") return null;
   const video = canvas.captureStream(60);
   const stream = new MediaStream([...video.getVideoTracks(), ...audio.stream.getAudioTracks()]);

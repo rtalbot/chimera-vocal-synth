@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { usePhosphor } from "../usePhosphor.ts";
 import { useStore } from "../store.ts";
 import { creatureById } from "../../wasm/engine.ts";
-import type { CreatureDef } from "../../wasm/types.ts";
+import type { CreatureDef, CreatureTelemetry } from "../../wasm/types.ts";
 import { liveTelemetry, previewTelemetry } from "../creatureLive.ts";
 import { V, SLOTS, heat, pressureLevel } from "../colors.ts";
 import { beamPts, dot, hfont, label, labelWidth, ring, seg, wrapLabel, type Pt } from "../render/vector.ts";
@@ -88,16 +88,29 @@ function fmtParam(v: number, p: CreatureDef["params"][number]): { value: string;
  * pressure, sound sources as rings in slot colours with ripples paced by the pitch, and the first
  * four parameters as readouts across the bottom.
  */
-export function CreatureView() {
+/** Recorded telemetry to draw instead of the live engine's (the dialogue stage). */
+export interface CreatureFeed {
+  def: CreatureDef;
+  /** the creature now; null draws it at rest */
+  frame(): CreatureTelemetry | null;
+  /** a name to title it with instead of the creature's */
+  title?: string;
+}
+
+export function CreatureView(props: { feed?: CreatureFeed } = {}) {
+  const feedRef = useRef(props.feed);
+  feedRef.current = props.feed;
   const glyph = useRef<{ peak: Record<string, number>; phase: Record<string, number> }>({ peak: {}, phase: {} });
   const ref = usePhosphor(({ ctx, w, h, dt }) => {
     const st = useStore.getState();
-    const def = creatureById(st.creature);
+    const feed = feedRef.current;
+    const def = feed?.def ?? creatureById(st.creature);
     if (!def) return;
     const vis = def.visual;
     const geo = geometry(def);
-    const live = liveTelemetry(def.id);
-    const tele = live ?? previewTelemetry(def, st.cparams[def.id]);
+    const live = feed ? feed.frame() : liveTelemetry(def.id);
+    const mine = feed ? undefined : st.cparams[def.id];
+    const tele = live ?? previewTelemetry(def, mine);
     // a narrow screen (a phone) stacks the title and status, and puts the readouts two by two
     const compact = w < 560;
     const top = compact ? 96 : 64, slotH = compact ? 132 : Math.min(118, h * 0.2);
@@ -147,7 +160,7 @@ export function CreatureView() {
 
     // sound sources: a ring sized by the vibration envelope, ripples paced by the pitch
     const pp = def.params.find((p) => p.role === "pitch");
-    const paramValue = (key: string, dflt: number) => (live ? (live.params[key] ?? dflt) : (st.cparams[def.id]?.[key] ?? dflt));
+    const paramValue = (key: string, dflt: number) => (live ? (live.params[key] ?? dflt) : (mine?.[key] ?? dflt));
     const pitch = pp ? paramValue(pp.key, pp.default) : 200;
     const rate = 1.2 + 4.8 * Math.max(0, Math.min(1, Math.log(pitch / 10) / Math.log(900)));
     (vis.sources ?? []).forEach((s, i) => {
@@ -187,9 +200,9 @@ export function CreatureView() {
     }
 
     // like a map's title: the name, the latin name, and what it is doing
-    label(ctx, fit(ctx, def.name.toUpperCase(), w - 32, compact ? 18 : 24, 0.18), 16, compact ? 30 : 34, { size: compact ? 18 : 24, color: V.blue, ls: 0.18 });
-    label(ctx, fit(ctx, def.latin.toUpperCase(), w - 34, 10, 0.16), 18, compact ? 48 : 54, { size: 10, color: V.blueMid, ls: 0.16 });
-    const state = live ? (live.call ? (def.calls.find((c) => c.id === live.call)?.name ?? (live.call === "speak" ? "Speaking" : live.call)) : live.gate > 0.05 ? "Sustaining" : "At rest") : "Not started";
+    label(ctx, fit(ctx, (feed?.title ?? def.name).toUpperCase(), w - 32, compact ? 18 : 24, 0.18), 16, compact ? 30 : 34, { size: compact ? 18 : 24, color: V.blue, ls: 0.18 });
+    label(ctx, fit(ctx, (feed?.title ? def.name : def.latin).toUpperCase(), w - 34, 10, 0.16), 18, compact ? 48 : 54, { size: 10, color: V.blueMid, ls: 0.16 });
+    const state = live ? (live.call ? (def.calls.find((c) => c.id === live.call)?.name ?? (live.call === "speak" ? "Speaking" : live.call)) : live.gate > 0.05 ? "Sustaining" : "At rest") : feed ? "At rest" : "Not started";
     const pitchText = pp ? (() => { const f = fmtParam(pitch, pp); return `${f.value} ${f.unit}`.trim().toUpperCase(); })() : "";
     if (compact) {
       label(ctx, `${state.toUpperCase()}${pitchText ? "   " + pitchText : ""}`, 18, 70, { size: 11, color: V.amber, ls: 0.14 });
