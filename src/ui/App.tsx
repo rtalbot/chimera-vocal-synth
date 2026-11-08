@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
+import { RecordButton } from "./components/RecordButton.tsx";
 import { useStore } from "./store.ts";
 import { engine } from "../audio/AudioEngine.ts";
 import { AnatomyView } from "./components/AnatomyView.tsx";
@@ -119,6 +120,7 @@ function ViewToggles() {
       {!bestiary && <Toggle label="Airflow" checked={view.particles} onChange={(v) => setView({ particles: v })} />}
       <Toggle label={bestiary ? "Labels" : "Measurements"} checked={view.calipers} onChange={(v) => setView({ calipers: v })} />
       {!bestiary && <Toggle label="Grid" checked={view.grid} onChange={(v) => setView({ grid: v })} />}
+      <RecordButton />
     </div>
   );
 }

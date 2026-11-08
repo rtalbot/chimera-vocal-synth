@@ -162,6 +162,16 @@ export class AudioEngine {
     this.send({ type: "call", id, pitch, amp });
   }
 
+  /** A live stream of what you hear (the master output), for recording a clip; null before start.
+   *  Call the returned stop() when done, to unhook it from the output. */
+  outputStream(): { stream: MediaStream; stop: () => void } | null {
+    const { ctx, master } = this;
+    if (!ctx || !master) return null;
+    const dest = ctx.createMediaStreamDestination();
+    master.connect(dest);
+    return { stream: dest.stream, stop: () => master.disconnect(dest) };
+  }
+
   stopCall(): void {
     this.send({ type: "stopCall" });
   }
