@@ -15,6 +15,9 @@ for tests and the `chimera` CLI.
 - **Beatbox**: pads and a step sequencer, every drum an articulatory gesture.
 - **Bestiary**: songbird (two-voice syrinx), seal, alligator and elephant.
 - **Duet** (`?show=<id>`): two 3D heads replay a pre-rendered song.
+- **Dialogue** (`?dialogue`): a script for up to eight voices, each tuned (`Theo = male gravelly
+  pitch 95`) and each line said with a mood (`Ava (very sad): …`); a screenplay drops straight in.
+  A head for every speaker, recorded with the sound (and the script, lit line by line) as a video.
 
 Male, female and child bodies blend continuously. Everything on screen animates from live
 engine state: pressure in the airway, airflow, the vocal folds, spectra and formants.

@@ -9,7 +9,7 @@ import { initEngine } from "./harness.ts";
 
 await initEngine();
 const { parseScript, importScreenplay, setVoice, MAX_CAST, MAX_WORDS } = await import("../src/dialogue/script.ts");
-const { renderDialogue, lineAt, HOP, SAMPLE_RATE } = await import("../src/dialogue/render.ts");
+const { renderDialogue, lineAt, scriptLineAt, HOP, SAMPLE_RATE } = await import("../src/dialogue/render.ts");
 const { g2p } = await import("../src/ui/g2p.ts");
 const await_tune = await import("../src/dialogue/tune.ts");
 const await_emotion = await import("../src/dialogue/emotion.ts");
@@ -132,6 +132,10 @@ describe("dialogue render", () => {
     expect(voicedAt(ava, mid(ava.lines[0]))).toBeGreaterThan(10 * voicedAt(ava, mid(theo.lines[0])) + 1e-9);
     expect(voicedAt(theo, mid(theo.lines[0]))).toBeGreaterThan(10 * voicedAt(theo, mid(ava.lines[0])) + 1e-9);
     expect(lineAt(ava, mid(ava.lines[0]))?.line).toBe(ava.lines[0]);
+    // the script as it plays: every line in order, who says it, and when
+    expect(d.script.map((l) => [l.speakers.join("+"), l.text])).toEqual([["Ava", "Hello there."], ["Theo", "We waited."], ["Ava+Theo", "Yes."]]);
+    expect(d.script.map((_, i) => scriptLineAt(d.script, mid(d.script[i])))).toEqual([0, 1, 2]);
+    expect(scriptLineAt(d.script, 0.1)).toBe(-1);
     // the mix: a WAV of the whole dialogue, sounding, under full scale
     const pcm = new Int16Array(d.wav, 44);
     expect(pcm.length).toBe(Math.round(d.duration * SAMPLE_RATE));

@@ -7,7 +7,7 @@ import { label, labelWidth } from "../ui/render/vector.ts";
 import { V } from "../ui/colors.ts";
 import { recordClip, type Recording } from "../ui/record.ts";
 import type { Transport } from "../show/transport.ts";
-import { lineAt, type RenderedVoice } from "./render.ts";
+import { lineAt, scriptLineAt, type RenderedVoice, type ScriptLine } from "./render.ts";
 
 export interface StagePanel {
   voice: RenderedVoice;
@@ -24,7 +24,8 @@ function grid(n: number): [number, number] {
   return [Math.ceil(n / 3), 3];
 }
 
-export function recordStage(panels: StagePanel[], transport: Transport, done: (file: Blob, ext: string) => void): Recording | null {
+/** `script`: shown beside the heads, the line being said lit (leave it out for the heads alone). */
+export function recordStage(panels: StagePanel[], transport: Transport, done: (file: Blob, ext: string) => void, script?: readonly ScriptLine[]): Recording | null {
   const W = 1920, H = 1080;
   const canvas = document.createElement("canvas");
   canvas.width = W;
@@ -32,15 +33,19 @@ export function recordStage(panels: StagePanel[], transport: Transport, done: (f
   const ctx = canvas.getContext("2d")!;
   const [cols, rows] = grid(panels.length);
   const pad = 16, head = 56, foot = 92;
-  const tw = (W - pad * (cols + 1)) / cols, th = (H - pad * (rows + 1)) / rows;
+  const sw = script?.length ? 600 : 0;
+  const x0 = sw ? sw + pad : 0;
+  const tw = (W - x0 - pad * (cols + 1)) / cols, th = (H - pad * (rows + 1)) / rows;
+  const scroller = script?.length ? scriptPanel(ctx, script, pad, pad, sw - pad, H - 2 * pad) : null;
 
   let raf = 0;
   const draw = () => {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, W, H);
     const t = transport.time();
+    scroller?.(t);
     panels.forEach((p, i) => {
-      const x = pad + (i % cols) * (tw + pad), y = pad + Math.floor(i / cols) * (th + pad);
+      const x = x0 + pad + (i % cols) * (tw + pad), y = pad + Math.floor(i / cols) * (th + pad);
       ctx.strokeStyle = V.blueDim;
       ctx.lineWidth = 1;
       ctx.strokeRect(x + 0.5, y + 0.5, tw - 1, th - 1);
@@ -92,4 +97,69 @@ function caption(ctx: CanvasRenderingContext2D, v: RenderedVoice, t: number, x: 
     label(ctx, w, cx, cy, { ...o, color: i === now.word ? V.amber : V.blueMid, alpha: i === now.word ? 1 : 0.75 });
     cx += ww + space;
   }
+}
+
+/**
+ * The script as a scrolling column: each line with its speakers (and mood) above it; the line
+ * being said lit in amber with a bar beside it, lines said dimmed, and the view easing to keep
+ * the current line a third of the way down.
+ */
+function scriptPanel(ctx: CanvasRenderingContext2D, lines: readonly ScriptLine[], x: number, y: number, w: number, h: number): (t: number) => void {
+  const top = 64, textSize = 19, nameSize = 13, lineGap = 28, blockGap = 22, inset = 26;
+  const text = { size: textSize, ls: 0.04 };
+  // lay out once: wrap each line's words to the column
+  const blocks = lines.map((l) => {
+    const rowsOut: string[] = [];
+    let row = "";
+    for (const word of l.text.split(/\s+/)) {
+      const next = row ? `${row} ${word}` : word;
+      if (row && labelWidth(ctx, next, text) > w - inset - 18) {
+        rowsOut.push(row);
+        row = word;
+      } else row = next;
+    }
+    if (row) rowsOut.push(row);
+    return { line: l, rows: rowsOut, h: 22 + rowsOut.length * lineGap };
+  });
+  const offsets: number[] = [];
+  let total = 0;
+  for (const b of blocks) {
+    offsets.push(total);
+    total += b.h + blockGap;
+  }
+  let scroll = 0;
+  return (t: number) => {
+    const now = scriptLineAt(lines, t);
+    // where the view should be: the current line (or the next to come) a third of the way down
+    let focus = now;
+    if (focus < 0) focus = Math.max(0, lines.findIndex((l) => l.t0 > t));
+    const want = Math.max(0, Math.min(Math.max(0, total - (h - top)), offsets[focus] - (h - top) / 3));
+    scroll += (want - scroll) * 0.12;
+
+    ctx.strokeStyle = V.blueDim;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    label(ctx, "SCRIPT", x + 18, y + 34, { size: 22, color: V.blue, ls: 0.18 });
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + 1, y + top - 8, w - 2, h - top + 6);
+    ctx.clip();
+    blocks.forEach((b, i) => {
+      const by = y + top + offsets[i] - scroll;
+      if (by > y + h || by + b.h < y + top - 30) return;
+      const current = i === now, past = now >= 0 ? i < now : b.line.t1 < t;
+      const alpha = current ? 1 : past ? 0.4 : 0.8;
+      if (current) {
+        ctx.fillStyle = V.amber;
+        ctx.globalAlpha = 0.9;
+        ctx.fillRect(x + 10, by - 4, 4, b.h);
+        ctx.globalAlpha = 1;
+      }
+      const who = b.line.speakers.join(" + ").toUpperCase();
+      label(ctx, who, x + inset, by + 12, { size: nameSize, color: current ? V.amber : V.blueMid, ls: 0.16, alpha });
+      if (b.line.mood) label(ctx, `(${b.line.mood})`, x + inset + labelWidth(ctx, who, { size: nameSize, ls: 0.16 }) + 10, by + 12, { size: nameSize, color: V.blueMid, ls: 0.06, alpha: alpha * 0.8 });
+      b.rows.forEach((r, k) => label(ctx, r, x + inset, by + 22 + (k + 1) * lineGap - 6, { ...text, color: current ? V.amber : V.blue, alpha }));
+    });
+    ctx.restore();
+  };
 }

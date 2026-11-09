@@ -3038,6 +3038,62 @@ input[type="range"]::-moz-range-thumb {
   line-height: 1.4;
 }
 
+.dialogue-lines {
+  height: 100%;
+  margin: 0;
+  padding: 0 4px 0 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.dialogue-lines li button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px 6px 12px;
+  border: 0;
+  border-left: 3px solid transparent;
+  background: none;
+  color: var(--blue);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dialogue-lines li.said button {
+  opacity: 0.45;
+}
+
+.dialogue-lines li.now button {
+  border-left-color: var(--amber);
+  color: var(--amber);
+}
+
+.dialogue-line-who {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--blue-mid);
+}
+
+.dialogue-lines li.now .dialogue-line-who {
+  color: var(--amber);
+}
+
+.dialogue-line-text {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.dialogue-with-script {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 12px;
+  color: var(--blue-mid);
+}
+
 .dialogue-mood {
   font-style: italic;
 }
