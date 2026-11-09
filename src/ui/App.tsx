@@ -27,6 +27,8 @@ import { bodyLabel, presetOf, PRESETS } from "./body.ts";
 const AnatomyView3D = lazy(() => import("./components/AnatomyView3D.tsx").then((m) => ({ default: m.AnatomyView3D })));
 // the duet page (`?show=<id>`): two 3D heads replaying a pre-rendered song
 const DuetPage = lazy(() => import("./components/DuetPage.tsx").then((m) => ({ default: m.DuetPage })));
+// the dialogue page (`?dialogue`): a script for several voices, a head each, recorded together
+const DialoguePage = lazy(() => import("../dialogue/DialoguePage.tsx").then((m) => ({ default: m.DialoguePage })));
 
 /** the show to play, from `?show=<id>` (a plain folder name under public/shows) */
 function showId(): string | null {
@@ -96,6 +98,9 @@ function TopBar() {
             {starting ? "Starting…" : "Start audio"}
           </button>
         )}
+        <a className="chip dialogue-link" href="?dialogue" title="Write a dialogue for several voices and record it">
+          Dialogue
+        </a>
         <a className="repo-link" href="https://github.com/jamesondh/chimera-vocal-synth" target="_blank" rel="noreferrer" aria-label="Source code on GitHub" title="Source code on GitHub">
           <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
             <path
@@ -217,6 +222,12 @@ function PlayRight() {
 }
 
 export function App() {
+  if (new URLSearchParams(window.location.search).has("dialogue"))
+    return (
+      <Suspense fallback={null}>
+        <DialoguePage />
+      </Suspense>
+    );
   const show = showId();
   if (show)
     return (
