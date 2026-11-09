@@ -2933,19 +2933,57 @@ input[type="range"]::-moz-range-thumb {
 
 .dialogue-cast {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 4px 10px;
-  max-height: 168px;
+  gap: 4px;
+  max-height: 38vh;
   overflow-y: auto;
+}
+
+.dialogue-cast-member {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
 }
 
 .dialogue-cast-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 6px;
   min-width: 0;
   font-size: 12px;
+}
+
+.dialogue-cast-row button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.dialogue-tune-toggle.on {
+  color: var(--amber);
+}
+
+.dialogue-tune {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--blue-dim, #123);
+  border-radius: 4px;
+}
+
+.dialogue-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dialogue-knobs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 12px;
+}
+
+.dialogue-knobs .set .slider label span {
+  color: var(--amber);
 }
 
 .dialogue-cast-name {

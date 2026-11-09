@@ -11,6 +11,7 @@ await initEngine();
 const { parseScript, importScreenplay, setVoice, MAX_CAST, MAX_WORDS } = await import("../src/dialogue/script.ts");
 const { renderDialogue, lineAt, HOP, SAMPLE_RATE } = await import("../src/dialogue/render.ts");
 const { g2p } = await import("../src/ui/g2p.ts");
+const await_tune = await import("../src/dialogue/tune.ts");
 g2p.setDictionaryText(gunzipSync(readFileSync(new URL("../public/data/cmudict.txt.gz", import.meta.url))).toString());
 
 describe("dialogue script", () => {
@@ -29,7 +30,7 @@ Theo & kit: Bye.`,
     );
     expect(errors).toEqual([]);
     expect(script.cast.map((c) => [c.name, c.body])).toEqual([["Ava", "female"], ["theo", "male"], ["Kit", "child"]]);
-    expect(script.cast[1].pitch).toBe(100);
+    expect(script.cast[1].tune.set.pitch).toBe(100);
     expect(script.steps).toEqual([
       { kind: "line", line: { speakers: [0], text: "Hello there.", sung: false } },
       { kind: "line", line: { speakers: [0, 1], text: "Welcome!", sung: false } },
@@ -109,7 +110,7 @@ describe("screenplay import", () => {
     const t = setVoice(im.text, dev, "child");
     const { script } = parseScript(t);
     expect(script.cast[1].body).toBe("child");
-    expect(script.cast[1].pitch).toBe(dev.pitch);
+    expect(script.cast[1].tune).toEqual(dev.tune);
   });
 });
 
@@ -137,5 +138,65 @@ describe("dialogue render", () => {
     for (const s of pcm) peak = Math.max(peak, Math.abs(s));
     expect(peak).toBeGreaterThan(8000);
     expect(peak).toBeLessThanOrEqual(32767 * 0.96);
+  }, 60_000);
+});
+
+describe("voice tuning", () => {
+  const { parseTune, formatTune, humanSettings } = await_tune;
+
+  test("presets and settings on a cast line; a word that is both is a setting when a number follows", () => {
+    const { tune, errors } = parseTune(["gravelly", "slow", "pitch", "95", "breathy", "0.6", "bright"]);
+    expect(errors).toEqual([]);
+    expect(tune.presets).toEqual(["gravelly", "slow", "bright"]);
+    expect(tune.set).toEqual({ pitch: 95, breathy: 0.6 });
+    expect(parseTune(formatTune(tune).split(" ")).tune).toEqual(tune);
+    // explicit settings win over presets; values are kept in range
+    const s = humanSettings("male", parseTune(["gravelly", "rough", "0.1", "rate", "9"]).tune);
+    expect(s.source.roughness).toBe(0.1);
+    expect(s.rate).toBe(2);
+    expect(parseTune(["wobbly"]).errors.length).toBe(1);
+    expect(parseTune(["pitch"]).errors.length).toBe(1);
+  });
+
+  test("an imported screenplay tells apart characters given the same voice", () => {
+    const im = importScreenplay("ANA: One.\nBEA: Two.\nCAL: Three.\nDEE: Four.");
+    const cast = parseScript(im.text).script.cast;
+    expect(cast.map((c) => c.body)).toEqual(["female", "male", "female", "male"]);
+    expect(cast[0].tune.set).toEqual({});
+    expect(cast[2].tune.set.pitch).toBeDefined();
+    expect(cast[2].tune.set.pitch).not.toBe(humanSettings("female", cast[0].tune).f0);
+  });
+
+  // each setting reaches the sound: one short line, measured against the untuned voice
+  const LINE = "Where were you yesterday evening?";
+  async function said(cast: string) {
+    const { script, errors } = parseScript(`A = ${cast}\nA: ${LINE}`);
+    expect(errors).toEqual([]);
+    const d = await renderDialogue(script);
+    const v = d.voices[0], l = v.lines[0];
+    const pcm = new Int16Array(d.wav, 44);
+    let e = 0, de = 0;
+    for (let i = Math.floor(l.t0 * SAMPLE_RATE) + 1; i < l.t1 * SAMPLE_RATE; i++) {
+      e += pcm[i] ** 2;
+      de += (pcm[i] - pcm[i - 1]) ** 2;
+    }
+    const frames = Array.from({ length: v.tele.indexAt(l.t1) - v.tele.indexAt(l.t0) }, (_, k) => v.tele.message(v.tele.indexAt(l.t0) + k).t);
+    const voiced = frames.filter((f) => f.voicing > 0.5);
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+    return { dur: l.t1 - l.t0, f0: mean(voiced.map((f) => f.f0)), phLen: mean(frames.map((f) => f.phLen)), hiss: de / e };
+  }
+
+  test("speed, pitch and larynx", async () => {
+    const plain = await said("male");
+    expect((await said("male rate 1.5")).dur).toBeLessThan(plain.dur * 0.8);
+    expect((await said("male pitch 80")).f0).toBeLessThan(plain.f0 * 0.8);
+    expect((await said("male larynx -1")).phLen).toBeGreaterThan(plain.phLen + 0.5);
+    expect((await said("male larynx 1")).phLen).toBeLessThan(plain.phLen - 0.5);
+  }, 60_000);
+
+  test("breathy and pressed voices are brighter in the top of the spectrum", async () => {
+    const plain = await said("male");
+    expect((await said("male breathy 0.8")).hiss).toBeGreaterThan(plain.hiss * 1.1);
+    expect((await said("male tense 0.9")).hiss).toBeGreaterThan(plain.hiss * 1.1);
   }, 60_000);
 });

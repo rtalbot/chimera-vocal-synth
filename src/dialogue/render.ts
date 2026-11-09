@@ -9,10 +9,10 @@
 import { chimeraModule } from "../wasm/chimera.ts";
 import { planPhrases, type Phrase } from "../wasm/engine.ts";
 import type { BodyMix, Gesture } from "../wasm/types.ts";
-import { writeGestures } from "../wasm/wire.ts";
+import { CONTROL_KEYS, writeGestures } from "../wasm/wire.ts";
 import { g2p } from "../ui/g2p.ts";
 import { wordSpans } from "../ui/words.ts";
-import { PRESETS, defaultF0 } from "../ui/body.ts";
+import { humanSettings, type HumanVoiceSettings } from "./tune.ts";
 import type { Line } from "./script.ts";
 import { TeleTrack, TELE_VERSION } from "../show/tele.ts";
 import type { CastMember, Script } from "./script.ts";
@@ -63,6 +63,8 @@ export interface RenderedDialogue {
 interface Voice {
   member: CastMember;
   h: number;
+  /** the voice's settings, resolved */
+  human: HumanVoiceSettings;
   body: BodyMix;
   out: Float32Array;
   frames: Float32Array[];
@@ -82,9 +84,9 @@ export async function renderDialogue(script: Script, onProgress?: (done: number)
 
   const voices: Voice[] = script.cast.map((member) => {
     const h = x.engine_new(SAMPLE_RATE);
-    const body = PRESETS[member.body];
-    x.engine_set_body(h, body.female, body.child);
-    return { member, h, body, out: new Float32Array(0), frames: [], lines: [], cues: [] };
+    const human = humanSettings(member.body, member.tune);
+    tuneHuman(x, h, human);
+    return { member, h, human, body: human.body, out: new Float32Array(0), frames: [], lines: [], cues: [] };
   });
 
   // lay out the lines: each starts when the one before has ended; a shared line starts everyone at once
@@ -153,15 +155,45 @@ function yieldToPage(): Promise<void> {
   });
 }
 
+/** the engine's source value slots (crates/chimera-wasm engine_set_source) and articulator slots */
+const SOURCE_KEYS = ["f0", "glide", "pressure", "breathiness", "tension", "fry", "roughness", "vibratoDepth", "vibratoRate", "drift", "voiced", "brightness"];
+const ARTIC_SLOT = { larynx: CONTROL_KEYS.indexOf("larynx"), epilarynx: CONTROL_KEYS.indexOf("epilarynx") };
+
+/** A human's body, voice quality and resting larynx, set before it speaks. */
+function tuneHuman(x: Exports, h: number, s: HumanVoiceSettings): void {
+  x.engine_set_body(h, s.body.female, s.body.child);
+  setSource(x, h, s);
+  const a = new Float64Array(x.memory.buffer, x.engine_values(h), 32).fill(NaN);
+  a[ARTIC_SLOT.larynx] = s.artic.larynx;
+  a[ARTIC_SLOT.epilarynx] = s.artic.epilarynx;
+  x.engine_set_artic(h, 2);
+}
+
+/** The voice quality (and resting pitch) a line is said with. */
+function setSource(x: Exports, h: number, s: HumanVoiceSettings): void {
+  const v = new Float64Array(x.memory.buffer, x.engine_values(h), 32).fill(NaN);
+  const src: Record<string, number> = { f0: s.f0, ...s.source };
+  for (const [k, val] of Object.entries(src)) v[SOURCE_KEYS.indexOf(k)] = val;
+  x.engine_set_source(h);
+}
+
 /** Plan a human's line: English through the pronouncing dictionary; sung lines on one pitch. */
 function planHuman(x: Exports, v: Voice, line: Line, start: number): SaidLine | null {
   const { text, sung } = line;
   let phrases: Phrase[] = g2p.toPhrases(text);
   if (!phrases.length) return null;
-  const f0 = v.member.pitch ?? defaultF0(v.body);
+  const s = v.human;
   const shaped = phrases.map((p) => (sung ? { ...p, intonation: "flat" as const, pause: Math.min(p.pause, 0.15) } : p));
-  const plan = planPhrases(shaped, { body: v.body, t0: 0, rate: sung ? 0.7 : 1, f0 });
-  const gestures: Gesture[] = plan.gestures;
+  const plan = planPhrases(shaped, { body: s.body, t0: 0, rate: s.rate * (sung ? 0.7 : 1), f0: s.f0, accent: s.accent });
+  // speech sets the larynx on every vowel: the voice's larynx and twang ride on those targets
+  const gestures = plan.gestures.map((g: Gesture) => {
+    const t = { ...g.targets };
+    if (t.larynx !== undefined) {
+      t.larynx = Math.max(-1.5, Math.min(1.5, t.larynx + s.artic.larynx));
+      if (s.artic.epilarynx > 0) t.epilarynx = s.artic.epilarynx;
+    }
+    return { ...g, targets: t };
+  });
   v.cues.push({
     t: start,
     start: () => {

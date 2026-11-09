@@ -1,9 +1,9 @@
 /**
  * A dialogue script: who is in it, and who says what, in order.
  *
- *   # the cast: a name, "=", a voice (male, female or child), and optionally a pitch (Hz)
+ *   # the cast: a name, "=", a voice (male, female or child), then how it sounds (see tune.ts)
  *   Ava = female
- *   Theo = male 105
+ *   Theo = male gravelly pitch 95 rate 0.9   ← presets and settings: see tune.ts
  *   Kit = child
  *
  *   # the lines: one after another
@@ -16,15 +16,14 @@
  * Blank lines and lines starting with # are ignored. Names are matched without regard to case.
  */
 
-export type HumanBody = "male" | "female" | "child";
-export const HUMAN_BODIES: readonly HumanBody[] = ["male", "female", "child"];
+import { HUMAN_BODIES, NO_TUNE, formatTune, parseTune, variant, type HumanBody, type Tune } from "./tune.ts";
+export { HUMAN_BODIES, type HumanBody };
 
-/** A participant: a body, and its baseline pitch if given. */
+/** A participant: a body, and how it's tuned. */
 export interface CastMember {
   name: string;
   body: HumanBody;
-  /** baseline pitch (Hz) */
-  pitch?: number;
+  tune: Tune;
 }
 
 export interface Line {
@@ -64,14 +63,16 @@ export function parseScript(text: string): { script: Script; errors: ScriptError
       return;
     }
 
-    const member = /^([^:=]+?)\s*=\s*([\w-]+)(?:\s+([\d.]+))?\s*$/.exec(s);
+    const member = /^([^:=]+?)\s*=\s*([\w-]+)((?:\s+[\w.-]+)*)\s*$/.exec(s);
     if (member) {
       const name = member[1].trim();
       const voice = member[2].toLowerCase();
-      const pitch = member[3] ? Number(member[3]) : undefined;
+      const words = member[3].trim() ? member[3].trim().split(/\s+/) : [];
       if (find(name) >= 0) return errors.push({ line: n, message: `${name} is already in the cast` });
       if (!(HUMAN_BODIES as readonly string[]).includes(voice)) return errors.push({ line: n, message: `"${member[2]}" isn't a voice: use male, female or child` });
-      cast.push({ name, body: voice as HumanBody, ...(pitch ? { pitch } : {}) });
+      const { tune, errors: bad } = parseTune(words);
+      for (const m of bad) errors.push({ line: n, message: `${name}: ${m}` });
+      cast.push({ name, body: voice as HumanBody, tune });
       return;
     }
 
@@ -191,22 +192,36 @@ export function importScreenplay(text: string, voices: readonly HumanBody[] = VO
     words += n;
   }
 
-  const castText = characters.map((c, i) => `${c} = ${voices[i % voices.length]}`).join("\n");
+  // characters given the same voice are told apart (a little lower, rougher, breathier…)
+  const seen: Record<string, number> = {};
+  const castText = characters
+    .map((c, i) => {
+      const v = voices[i % voices.length];
+      const nth = (seen[v] = (seen[v] ?? -1) + 1);
+      const t = formatTune(variant(v, nth));
+      return `${c} = ${v}${t ? " " + t : ""}`;
+    })
+    .join("\n");
   const out = `# Cast: change who reads each part (male, female or child)\n${castText}\n\n${kept.map((l) => `${l.name}: ${l.words}`).join("\n")}\n`;
   return { text: out, characters, lines: kept.length, words, dropped: { lines: droppedLines, characters: [...droppedNames] } };
 }
 
-/** A new body for a part (the cast line rewritten in place, its pitch kept). */
-export function setVoice(text: string, member: CastMember, body: HumanBody): string {
-  const name = member.name;
+/** The script with one cast member's line rewritten in place: its voice and its tuning. */
+export function setMember(text: string, name: string, voice: string, tune: Tune = NO_TUNE): string {
   const lines = text.split("\n");
   const i = lines.findIndex((l) => {
     const m = /^\s*([^:=#]+?)\s*=\s*[\w-]+/.exec(l);
     return m && m[1].trim().toLowerCase() === name.toLowerCase();
   });
   if (i < 0) return text;
-  lines[i] = `${name} = ${body}${member.pitch ? " " + member.pitch : ""}`;
+  const t = formatTune(tune);
+  lines[i] = `${name} = ${voice}${t ? " " + t : ""}`;
   return lines.join("\n");
+}
+
+/** A new body for a part, keeping its tuning. */
+export function setVoice(text: string, member: CastMember, body: HumanBody): string {
+  return setMember(text, member.name, body, member.tune);
 }
 
 /** Words of dialogue in a script, as the limit counts them. */
@@ -214,10 +229,10 @@ export function scriptWords(script: Script): number {
   return script.steps.reduce((n, s) => n + (s.kind === "line" ? wordCount(s.line.text) : 0), 0);
 }
 
-export const EXAMPLE_SCRIPT = `# The cast: a name = male, female or child, and optionally a pitch
-Ava = female
-Theo = male 100
-Kit = child
+export const EXAMPLE_SCRIPT = `# The cast: a name = male, female or child, then how they sound
+Ava = female lively
+Theo = male gravelly pitch 100
+Kit = child bright
 
 # Then who says what, in order
 Ava: Hello? Is somebody there?
