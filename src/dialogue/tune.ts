@@ -124,7 +124,7 @@ export interface HumanVoiceSettings {
   f0: number;
   rate: number;
   accent: number;
-  source: { breathiness: number; tension: number; roughness: number; fry: number; brightness: number; pressure: number };
+  source: { breathiness: number; tension: number; roughness: number; fry: number; brightness: number; pressure: number; vibratoDepth: number; drift: number; voiced: number };
   artic: { larynx: number; epilarynx: number };
 }
 
@@ -144,7 +144,7 @@ export function humanSettings(base: HumanBody, t: Tune): HumanVoiceSettings {
     f0: e.pitch ?? defaultF0(body),
     rate: e.rate ?? 1,
     accent: e.range ?? 0.14,
-    source: { breathiness: e.breathy ?? s.breathiness, tension: e.tense ?? s.tension, roughness: e.rough ?? s.roughness, fry: e.fry ?? s.fry, brightness: e.bright ?? s.brightness, pressure: e.loud ?? s.pressure },
+    source: { breathiness: e.breathy ?? s.breathiness, tension: e.tense ?? s.tension, roughness: e.rough ?? s.roughness, fry: e.fry ?? s.fry, brightness: e.bright ?? s.brightness, pressure: e.loud ?? s.pressure, vibratoDepth: s.vibratoDepth, drift: s.drift, voiced: 1 },
     artic: { larynx: e.larynx ?? 0, epilarynx: e.twang ?? 0 },
   };
 }

@@ -10,6 +10,7 @@
  *   Ava: Hello there. Who are you?
  *   Kit: We have waited for you.
  *   Ava + Theo: Welcome!          ← together: both start at once
+ *   Ava (a little sad): I know.   ← how it's said: emotions, see emotion.ts
  *   Kit sings: We cannot stop.    ← "sings": on one pitch
  *   (pause 1.5)                   ← silence, in seconds
  *
@@ -17,6 +18,7 @@
  */
 
 import { HUMAN_BODIES, NO_TUNE, formatTune, parseTune, variant, type HumanBody, type Tune } from "./tune.ts";
+import { EMOTIONS, formatMood, parseMood, type Mood } from "./emotion.ts";
 export { HUMAN_BODIES, type HumanBody };
 
 /** A participant: a body, and how it's tuned. */
@@ -31,6 +33,8 @@ export interface Line {
   speakers: number[];
   text: string;
   sung: boolean;
+  /** how it's said: an emotion or two, and how strongly */
+  mood?: Mood;
 }
 
 export type Step = { kind: "line"; line: Line } | { kind: "pause"; seconds: number };
@@ -76,17 +80,37 @@ export function parseScript(text: string): { script: Script; errors: ScriptError
       return;
     }
 
-    const said = /^([^:]+?)(\s+sings?)?\s*:\s*(.*)$/i.exec(s);
+    const said = /^([^:]+?)\s*:\s*(.*)$/.exec(s);
     if (said) {
-      const names = said[1].split(/\s*(?:\+|&|\band\b)\s*/i).filter(Boolean);
+      // "Ava (a little sad) sings: …": the mood in parentheses, "sings" at the end
+      let head = said[1];
+      const moodWords = [...head.matchAll(/\(([^)]*)\)/g)].map((m) => m[1]);
+      head = head.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+      const sung = /\s+sings?$/i.test(head);
+      head = head.replace(/\s+sings?$/i, "");
+      // a stage direction at the start of the words, as screenplays write it: "(sobbing) Where…"
+      let words = said[2].trim();
+      const lead = /^\(([^)]*)\)\s*/.exec(words);
+      if (lead) {
+        words = words.slice(lead[0].length);
+        moodWords.push(lead[1]);
+      }
+      let mood: Mood | null = null;
+      if (moodWords.length) {
+        const parsed = parseMood(moodWords.join(", "));
+        mood = parsed.mood;
+        // in the speaker's parentheses, a word that isn't an emotion is a mistake; in the words, a stage direction
+        const inHead = parseMood([...said[1].matchAll(/\(([^)]*)\)/g)].map((m) => m[1]).join(", "));
+        if (inHead.unknown.length) errors.push({ line: n, message: `"${inHead.unknown.join(", ")}" isn't an emotion (try: ${Object.keys(EMOTIONS).join(", ")})` });
+      }
+      const names = head.split(/\s*(?:\+|&|\band\b)\s*/i).filter(Boolean);
       const speakers: number[] = [];
       for (const name of names) {
         const k = find(name);
         if (k < 0) errors.push({ line: n, message: `${name.trim()} isn't in the cast (add "${name.trim()} = female", say)` });
         else if (!speakers.includes(k)) speakers.push(k);
       }
-      const words = said[3].trim();
-      if (speakers.length && words) steps.push({ kind: "line", line: { speakers, text: words, sung: !!said[2] } });
+      if (speakers.length && words) steps.push({ kind: "line", line: { speakers, text: words, sung, ...(mood ? { mood } : {}) } });
       return;
     }
 
@@ -127,7 +151,7 @@ export interface Imported {
  * MAX_WORDS, are left out (and counted).
  */
 export function importScreenplay(text: string, voices: readonly HumanBody[] = VOICE_CYCLE): Imported {
-  const said: { name: string; words: string }[] = [];
+  const said: { name: string; words: string; mood?: string }[] = [];
   const rows = text.replace(/\r\n?/g, "\n").split("\n");
   const cue = (raw: string): string | null => {
     const s = raw.trim();
@@ -151,21 +175,38 @@ export function importScreenplay(text: string, voices: readonly HumanBody[] = VO
   if (colon.length >= 2 && colon.length >= rows.filter((r) => cue(r)).length) {
     for (const r of colon) {
       const m = /^\s*([^:]+):\s*(.*)$/.exec(r)!;
-      said.push({ name: clean(m[1]), words: m[2].trim() });
+      const paren = /\(([^)]*)\)/.exec(m[1]);
+      const mood = paren ? parseMood(paren[1]).mood : null;
+      said.push({ name: clean(m[1]), words: m[2].trim(), ...(mood ? { mood: formatMood(mood) } : {}) });
     }
   } else {
     for (let i = 0; i < rows.length; i++) {
       const name = cue(rows[i]);
       if (!name || i + 1 >= rows.length || !rows[i + 1].trim()) continue;
-      const words: string[] = [];
+      // the speech, split where a direction gives a new mood: "(sobbing)" … "(suddenly furious)"
+      let words: string[] = [];
+      let mood: string | undefined;
+      const flush = () => {
+        const w = words.join(" ").replace(/\s+/g, " ").trim();
+        if (w) said.push({ name, words: w, ...(mood ? { mood } : {}) });
+        words = [];
+      };
       let j = i + 1;
       for (; j < rows.length && rows[j].trim(); j++) {
         const s = rows[j].trim();
-        if (/^\(.*\)$/.test(s)) continue; // (beat), (quietly)
+        const direction = /^\((.*)\)$/.exec(s);
+        const found = direction ? parseMood(direction[1]).mood : null;
+        if (direction) {
+          // (beat), (to Dev): not a mood, skipped; a mood: from here on
+          if (found) {
+            flush();
+            mood = formatMood(found);
+          }
+          continue;
+        }
         words.push(s.replace(/\(.*?\)/g, "").trim());
       }
-      const w = words.join(" ").replace(/\s+/g, " ").trim();
-      if (w) said.push({ name, words: w });
+      flush();
       i = j;
     }
   }
@@ -202,7 +243,7 @@ export function importScreenplay(text: string, voices: readonly HumanBody[] = VO
       return `${c} = ${v}${t ? " " + t : ""}`;
     })
     .join("\n");
-  const out = `# Cast: change who reads each part (male, female or child)\n${castText}\n\n${kept.map((l) => `${l.name}: ${l.words}`).join("\n")}\n`;
+  const out = `# Cast: change who reads each part (male, female or child)\n${castText}\n\n${kept.map((l) => `${l.name}${l.mood ? ` (${l.mood})` : ""}: ${l.words}`).join("\n")}\n`;
   return { text: out, characters, lines: kept.length, words, dropped: { lines: droppedLines, characters: [...droppedNames] } };
 }
 
@@ -234,13 +275,13 @@ Ava = female lively
 Theo = male gravelly pitch 100
 Kit = child bright
 
-# Then who says what, in order
-Ava: Hello? Is somebody there?
+# Then who says what, in order, and how
+Ava (nervous): Hello? Is somebody there?
 Kit: Over here! I found something.
-Theo: Don't touch it! What is it?
-Kit: It's humming. Listen!
+Theo (terrified): Don't touch it! What is it?
+Kit (excited): It's humming. Listen!
 (pause 0.5)
-Ava: It's only the wind in the pipes.
-Ava + Theo + Kit: Then let us sing!
+Ava (calm): It's only the wind in the pipes.
+Ava + Theo + Kit (joyful): Then let us sing!
 Kit sings: Together at last.
 `;

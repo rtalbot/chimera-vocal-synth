@@ -13,6 +13,7 @@ import { CONTROL_KEYS, writeGestures } from "../wasm/wire.ts";
 import { g2p } from "../ui/g2p.ts";
 import { wordSpans } from "../ui/words.ts";
 import { humanSettings, type HumanVoiceSettings } from "./tune.ts";
+import { formatMood, withMood } from "./emotion.ts";
 import type { Line } from "./script.ts";
 import { TeleTrack, TELE_VERSION } from "../show/tele.ts";
 import type { CastMember, Script } from "./script.ts";
@@ -40,6 +41,8 @@ export interface SaidLine {
   t0: number;
   t1: number;
   text: string;
+  /** how it was said, as written ("very sad") */
+  mood?: string;
   words: SaidWord[];
 }
 
@@ -182,7 +185,8 @@ function planHuman(x: Exports, v: Voice, line: Line, start: number): SaidLine | 
   const { text, sung } = line;
   let phrases: Phrase[] = g2p.toPhrases(text);
   if (!phrases.length) return null;
-  const s = v.human;
+  // the voice for this line: the speaker's own, moved by the line's mood
+  const s = withMood(v.human, line.mood);
   const shaped = phrases.map((p) => (sung ? { ...p, intonation: "flat" as const, pause: Math.min(p.pause, 0.15) } : p));
   const plan = planPhrases(shaped, { body: s.body, t0: 0, rate: s.rate * (sung ? 0.7 : 1), f0: s.f0, accent: s.accent });
   // speech sets the larynx on every vowel: the voice's larynx and twang ride on those targets
@@ -197,12 +201,14 @@ function planHuman(x: Exports, v: Voice, line: Line, start: number): SaidLine | 
   v.cues.push({
     t: start,
     start: () => {
+      // every line sets its voice: a mood lasts its line, the next line is said as it is
+      setSource(x, v.h, s);
       const n = writeGestures(x.memory.buffer, x.engine_records(v.h), gestures, MAX_GESTURES);
       x.engine_schedule(v.h, n, 0, 0);
     },
   });
   const words = wordSpans(shaped, plan).map((w) => ({ text: w.text, t0: start + w.t0, t1: start + w.t1 }));
-  return { t0: start, t1: start + plan.end, text, words };
+  return { t0: start, t1: start + plan.end, text, words, ...(line.mood ? { mood: formatMood(line.mood) } : {}) };
 }
 
 /** One frame of a human's telemetry, in the recorded track's layout (see show/tele.ts). */
